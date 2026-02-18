@@ -1,1 +1,7 @@
+{
+    "lab_id": "LAB1",
+    "pc_id": "PC12",
+    "mqtt_broker": "localhost",
+    "port": 1883
+}
 
