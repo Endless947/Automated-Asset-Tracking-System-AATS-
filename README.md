@@ -73,44 +73,6 @@ Install Mosquitto:
 - On macOS: `brew install mosquitto`
 - On Windows: Download from [mosquitto.org](https://mosquitto.org/download/)
 
-Start Mosquitto:
-
-```bash
-mosquitto
-```
-
-### 3. Setup Server
-
-```bash
-cd server
-pip install -r requirements.txt
-python app.py
-```
-
-### 4. Setup Student Agent
-
-```bash
-cd ../student_agent
-pip install -r requirements.txt
-python main.py
-```
-
-### 5. Admin Dashboard
-
-Open `admin_dashboard/index.html` in your web browser.
-
-## Usage
-
-1. Start the MQTT broker.
-2. Run the server.
-3. Run the student agent on devices with BLE capabilities.
-4. Access the admin dashboard to monitor assets.
-
-## API Endpoints
-
-- `GET /api/assets` - List all tracked assets
-- `POST /api/alert` - Send alert
-
 ## Contributing
 
 1. Fork the repository.
@@ -119,7 +81,5 @@ Open `admin_dashboard/index.html` in your web browser.
 4. Push to the branch.
 5. Open a Pull Request.
 
-## License
 
-This project is licensed under the MIT License.
 
