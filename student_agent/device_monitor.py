@@ -1,66 +1,83 @@
 import subprocess
-import time
 import threading
-from datetime import datetime
+import time
+from datetime import datetime, timezone
+from typing import Callable, Dict, List, Optional
 
 
 class USBDeviceMonitor:
-    def __init__(self, on_change_callback=None):
+    def __init__(
+        self,
+        tracked_devices: List[Dict],
+        poll_interval_sec: int = 2,
+        on_change_callback: Optional[Callable[[Dict], None]] = None,
+    ) -> None:
+        self.tracked_devices = tracked_devices
+        self.poll_interval_sec = poll_interval_sec
         self.on_change_callback = on_change_callback
         self.running = False
-        self.known_devices = set()
+        self._state: Dict[str, str] = {}
 
-    def get_connected_usb_devices(self):
+    def _now(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _get_present_instance_ids(self) -> List[str]:
+        command = [
+            "powershell",
+            "-Command",
+            "Get-PnpDevice -PresentOnly | Select-Object -ExpandProperty InstanceId",
+        ]
         try:
-            command = [
-                "powershell",
-                "-Command",
-                "Get-PnpDevice | Where-Object {$_.Status -eq 'OK'} | "
-                "Where-Object {$_.Class -in @('USB','HIDClass','Mouse','Keyboard')} | "
-                "Select-Object -ExpandProperty FriendlyName"
-            ]
+            output = subprocess.check_output(command, text=True, timeout=10)
+            return [line.strip().lower() for line in output.splitlines() if line.strip()]
+        except Exception as exc:
+            print(f"USB scan error: {exc}")
+            return []
 
-            result = subprocess.check_output(command, text=True)
-            devices = set()
+    def _is_connected(self, instance_ids: List[str], vid: str, pid: str) -> bool:
+        marker = f"vid_{vid.lower()}&pid_{pid.lower()}"
+        return any(marker in instance_id for instance_id in instance_ids)
 
-            for line in result.split("\n"):
-                line = line.strip()
-                if line:
-                    devices.add(line)
+    def _emit(self, payload: Dict) -> None:
+        if self.on_change_callback:
+            self.on_change_callback(payload)
 
-            return devices
-
-        except Exception as e:
-            print("Error fetching devices:", e)
-            return set()
-
-
-    def start(self):
+    def start(self) -> None:
+        if self.running:
+            return
         self.running = True
-        self.known_devices = self.get_connected_usb_devices()
-        thread = threading.Thread(target=self.monitor_loop, daemon=True)
+        thread = threading.Thread(target=self._monitor_loop, daemon=True)
         thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         self.running = False
 
-    def monitor_loop(self):
+    def _monitor_loop(self) -> None:
         while self.running:
-            current_devices = self.get_connected_usb_devices()
+            instance_ids = self._get_present_instance_ids()
 
-            connected = current_devices - self.known_devices
-            for device in connected:
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"[CONNECTED] {device} at {timestamp}")
-                if self.on_change_callback:
-                    self.on_change_callback(device, "connected", timestamp)
+            for device in self.tracked_devices:
+                device_id = device["device_id"]
+                vid = device["vid"]
+                pid = device["pid"]
+                alias = device.get("alias", device_id)
 
-            disconnected = self.known_devices - current_devices
-            for device in disconnected:
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"[DISCONNECTED] {device} at {timestamp}")
-                if self.on_change_callback:
-                    self.on_change_callback(device, "disconnected", timestamp)
+                connected = self._is_connected(instance_ids, vid, pid)
+                new_status = "CONNECTED" if connected else "MISSING"
+                old_status = self._state.get(device_id)
 
-            self.known_devices = current_devices
-            time.sleep(2)
+                if old_status != new_status:
+                    self._state[device_id] = new_status
+                    self._emit(
+                        {
+                            "device_id": device_id,
+                            "device_label": alias,
+                            "device_type": "usb",
+                            "status": new_status,
+                            "rssi": None,
+                            "observed_at": self._now(),
+                            "source": "usb_monitor",
+                        }
+                    )
+
+            time.sleep(self.poll_interval_sec)

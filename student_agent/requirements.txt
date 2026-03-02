@@ -1,2 +1,4 @@
+paho-mqtt
 wmi
 pywin32
+bleak

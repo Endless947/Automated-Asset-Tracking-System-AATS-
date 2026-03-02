@@ -1,9 +1,18 @@
-from device_monitor import USBDeviceMonitor
+from datetime import datetime, timezone
 
-def callback(device, status, timestamp):
-    print(f"Callback -> {device} {status} at {timestamp}")
 
-monitor = USBDeviceMonitor(on_change_callback=callback)
-monitor.start()
+def classify_bluetooth_status(rssi, weak_threshold):
+    if rssi is None:
+        return "MISSING"
+    if rssi < weak_threshold:
+        return "WEAK_SIGNAL"
+    return "CONNECTED"
 
-input("Monitoring... Press Enter to stop.\n")
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+if __name__ == "__main__":
+    print("Status test:", classify_bluetooth_status(-82, -75))
+    print("Now:", now_iso())

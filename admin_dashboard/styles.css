@@ -1,1 +1,121 @@
+:root {
+  --bg: #f4f6f8;
+  --card: #ffffff;
+  --text: #1f2a37;
+  --ok: #0f9d58;
+  --warning: #f5a623;
+  --critical: #d64545;
+  --border: #dbe2ea;
+}
 
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+  background: linear-gradient(160deg, #f8fbff 0%, #eef3f8 100%);
+  color: var(--text);
+  padding: 16px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.filters {
+  margin: 16px 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+input, select, button {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+button {
+  background: #1f4b99;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  background: var(--card);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.card.ok { border-color: var(--ok); }
+.card.warning { border-color: var(--warning); }
+.card.critical { border-color: var(--critical); }
+
+.card.pending {
+  border-style: dashed;
+  background: #fff9e6;
+}
+
+.card .meta {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.chip {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chip-pending {
+  background: #fff3c4;
+  color: #92400e;
+}
+
+.pc-card.pc-online {
+  border-color: var(--ok);
+}
+
+.pc-card.pc-offline {
+  border-color: var(--critical);
+  background: #ffe9e9;
+}
+
+.badge {
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #dfe7f2;
+}
+
+.badge.ok { background: #d6f5e4; color: #14532d; }
+.badge.critical { background: #ffe3e3; color: #7f1d1d; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+tr.warning td { background: #fff5df; }
+tr.critical td { background: #ffe9e9; }

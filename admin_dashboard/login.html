@@ -1,1 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AATS Login</title>
+  <style>
+    body { font-family: Arial, sans-serif; display: grid; place-items: center; min-height: 100vh; background: #eef2f7; }
+    .box { background: #fff; padding: 24px; border-radius: 10px; box-shadow: 0 8px 20px rgba(0,0,0,0.08); width: 320px; }
+    input, button { width: 100%; margin-top: 10px; padding: 8px; box-sizing: border-box; }
+    button { background: #1f4b99; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    #error { color: #b91c1c; margin-top: 8px; font-size: 13px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>Admin Login</h2>
+    <input id="username" placeholder="Username" autocomplete="username" />
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
+    <button id="loginBtn">Login</button>
+    <div id="error"></div>
+  </div>
+  <script>
+    const API_BASE = "http://localhost:8000";
 
+    async function doLogin() {
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value;
+      const errorEl = document.getElementById("error");
+      const btn = document.getElementById("loginBtn");
+
+      errorEl.textContent = "";
+      if (!username || !password) {
+        errorEl.textContent = "Please enter username and password.";
+        return;
+      }
+
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        if (!res.ok) {
+          errorEl.textContent = "Invalid credentials or server error.";
+          return;
+        }
+        const data = await res.json();
+        if (!data.token) {
+          errorEl.textContent = "Login response missing token.";
+          return;
+        }
+        localStorage.setItem("aats_admin_token", data.token);
+        window.location.href = "index.html";
+      } catch (err) {
+        errorEl.textContent = "Unable to reach server: " + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById("loginBtn").addEventListener("click", function (e) {
+      e.preventDefault();
+      doLogin();
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        doLogin();
+      }
+    });
+  </script>
+</body>
+</html>
