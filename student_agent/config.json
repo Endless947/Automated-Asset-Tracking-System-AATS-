@@ -1,24 +1,19 @@
 {
   "lab_id": "LAB1",
   "pc_id": "PC12",
-  "broker": "192.168.1.6",
+  "broker": "",// ip of admin pc
   "port": 1883,
   "scan_interval_sec": 2,
   "heartbeat_interval_sec": 30,
   "agent_version": "1.0.0",
   "usb_devices": [
     {
-      "device_id": "mouse_antesports",
-      "vid": "b58e",
-      "pid": "0005",
-      "alias": "Ant Esports Mouse"
-    },
-    {
-      "device_id": "keyboard_redragon",
-      "vid": "258a",
-      "pid": "002a",
-      "alias": "Redragon Keyboard"
-    }
+      "device_id": "",
+      "vid": "",
+      "pid": "",
+      "alias": ""
+    }//fill according to your usb devices, you can find vid and pid in device manager
+    
   ],
   "bluetooth_devices": []
 }
