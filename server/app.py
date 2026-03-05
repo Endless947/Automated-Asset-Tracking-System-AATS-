@@ -184,8 +184,8 @@ def get_alerts(
     to_time: str | None = Query(default=None, alias="to"),
     severity: str | None = None,
     status: str | None = None,
+    _: None = Depends(require_admin),
 ) -> list[Dict]:
-    _ = require_admin()  # explicit call for dependency when used outside FastAPI injection
     if severity is None:
         critical = db.list_events(severity="CRITICAL", alert_status=status, from_time=from_time, to_time=to_time, limit=500)
         warning = db.list_events(severity="WARNING", alert_status=status, from_time=from_time, to_time=to_time, limit=500)
@@ -204,8 +204,8 @@ def get_events(
     from_time: str | None = Query(default=None, alias="from"),
     to_time: str | None = Query(default=None, alias="to"),
     limit: int = 200,
+    _: None = Depends(require_admin),
 ) -> list[Dict]:
-    _ = require_admin()
     return db.list_events(
         lab_id=lab_id,
         pc_id=pc_id,
