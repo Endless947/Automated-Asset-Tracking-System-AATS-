@@ -1,31 +1,24 @@
 {
   "lab_id": "LAB1",
   "pc_id": "PC12",
-  "broker": "localhost",
+  "broker": "192.168.1.6",
   "port": 1883,
   "scan_interval_sec": 2,
   "heartbeat_interval_sec": 30,
   "agent_version": "1.0.0",
   "usb_devices": [
     {
-      "device_id": "mouse_logitech",
-      "vid": "046d",
-      "pid": "c077",
-      "alias": "Logitech Mouse"
+      "device_id": "mouse_antesports",
+      "vid": "b58e",
+      "pid": "0005",
+      "alias": "Ant Esports Mouse"
     },
     {
-      "device_id": "keyboard_generic",
-      "vid": "046d",
-      "pid": "c31c",
-      "alias": "USB Keyboard"
+      "device_id": "keyboard_redragon",
+      "vid": "258a",
+      "pid": "002a",
+      "alias": "Redragon Keyboard"
     }
   ],
-  "bluetooth_devices": [
-    {
-      "device_id": "bt_headset_1",
-      "mac": "AA:BB:CC:DD:EE:FF",
-      "alias": "Bluetooth Headset",
-      "weak_rssi_threshold": -75
-    }
-  ]
+  "bluetooth_devices": []
 }
