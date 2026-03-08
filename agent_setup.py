@@ -65,10 +65,44 @@ def is_setup_done(base_dir: str) -> bool:
         with open(path) as f:
             cfg = json.load(f)
         broker = cfg.get("broker", "")
-        # If broker is still localhost/placeholder, treat as not set up
         return broker not in ("", "localhost", "127.0.0.1")
     except Exception:
         return False
+
+
+# ── Uninstall ───────────────────────────────────────────────
+
+def unregister_autostart() -> None:
+    """Remove agent from Windows registry auto-start."""
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0, winreg.KEY_SET_VALUE
+        )
+        winreg.DeleteValue(key, STARTUP_REG_NAME)
+        winreg.CloseKey(key)
+        print("[+] Agent removed from auto-start.")
+    except FileNotFoundError:
+        print("[!] Agent was not registered for auto-start.")
+    except Exception as e:
+        print(f"[!] Could not remove auto-start: {e}")
+
+
+def uninstall(base_dir: str) -> None:
+    """Remove auto-start registration and clear config.json."""
+    print("\n[*] Uninstalling AATS Agent...")
+    unregister_autostart()
+
+    cfg = config_path(base_dir)
+    if os.path.exists(cfg):
+        os.remove(cfg)
+        print("[+] config.json cleared.")
+    else:
+        print("[!] No config.json found — nothing to clear.")
+
+    print("\n[+] Uninstall complete.")
+    print("    The agent will no longer start on boot.")
+    print("    You can delete the project folder manually if needed.")
+    input("\nPress Enter to exit...")
 
 
 # ── Step 1: Discover Admin IP ───────────────────────────────
@@ -140,7 +174,6 @@ def scan_usb_devices() -> list[dict]:
     devices = []
     try:
         raw = json.loads(result.stdout)
-        # PowerShell returns a dict if only one device, list otherwise
         if isinstance(raw, dict):
             raw = [raw]
         for item in raw:
@@ -255,11 +288,20 @@ def main() -> None:
     print("=" * 52)
     print("         AATS — Agent Setup & Launcher")
     print("=" * 52)
+    print("\n  1. Run / Setup agent")
+    print("  2. Uninstall agent (remove auto-start + clear config)")
+
+    choice = input("\n  Choose (1/2): ").strip()
 
     base_dir = get_base_dir()
 
+    if choice == "2":
+        uninstall(base_dir)
+        return
+
+    # ── Run / Setup ──────────────────────────────────────────
     if is_setup_done(base_dir):
-        print("[+] Setup already complete. Launching agent...\n")
+        print("\n[+] Setup already complete. Launching agent...\n")
         launch_agent(base_dir)
         return
 
