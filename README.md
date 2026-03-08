@@ -379,3 +379,6 @@ the auto ip detection from admin pc does not work
 
 ### 6. PC switched off
 need to find solution to what if the device is stollen after the pc is turned off, maybe shift the dectection from pc to a microcontroller like arduino or esp32 or rasbery pie
+
+### 7. Passwords
+passwords need to be added to delete the exe on agent pc or the exe has to be run on the admin user which the student has no access to.
