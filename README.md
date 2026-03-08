@@ -22,7 +22,7 @@ In evaluations you can demonstrate AATS using these example flows:
   - Bring the device back into range and show that the alert eventually closes and severity returns to **OK**.
 
 - **PC abruptly powered off**
-  - With the student agent connected to the MQTT broker, confirm the PC appears as **online** in the dashboard’s PC status section.
+  - With the student agent connected to the MQTT broker, confirm the PC appears as **online** in the dashboard's PC status section.
   - Forcefully power off or disconnect the PC from the network.
   - The broker publishes the MQTT Last Will & Testament, and the server updates the PC heartbeat to **offline**, which is reflected on the dashboard without requiring a clean shutdown from the agent.
 
@@ -57,9 +57,73 @@ In evaluations you can demonstrate AATS using these example flows:
 - `GET /labs/{lab_id}/pcs`
 - `GET /alerts?from=&to=&severity=&status=`
 - `GET /events?lab_id=&pc_id=&device_id=&severity=&status=&from=&to=&limit=`
- - `POST /auth/login`
+- `POST /auth/login`
 
-## Setup
+---
+
+## Quick Start (Recommended)
+
+AATS ships with two setup scripts that handle everything automatically.
+
+### Prerequisites (install once on every PC)
+- [Python 3.10+](https://www.python.org/downloads/) — make sure to check **"Add Python to PATH"** during install
+- [Mosquitto MQTT Broker](https://mosquitto.org/download/) — install on the **Admin PC only**
+
+### Step 1 — Clone the repo (on every PC)
+```powershell
+git clone https://github.com/yourname/AATS
+cd AATS
+```
+
+### Step 2 — Install dependencies (on every PC)
+```powershell
+pip install -r server/requirements.txt
+pip install -r student_agent/requirements.txt
+pip install pyinstaller
+```
+
+### Step 3 — Build the EXEs (on every PC, one time only)
+```powershell
+# Admin PC EXE
+pyinstaller --onefile --uac-admin admin_setup.py
+
+# Lab PC EXE
+pyinstaller --onefile agent_setup.py
+```
+Both EXEs will appear in the `dist/` folder.
+
+### Step 4 — Run on Admin PC
+Double-click `dist/admin_setup.exe` (Windows will ask for Administrator permissions — click Yes).
+
+It will automatically:
+- Open firewall ports for MQTT and the API
+- Start Mosquitto broker
+- Start the FastAPI server
+- Serve the admin dashboard
+- Open the dashboard login page in your browser
+- Broadcast its IP address so Lab PCs can find it automatically
+
+> Login credentials: username `admin`, password `admin`
+
+> Close the window to stop all services and automatically close the firewall ports.
+
+### Step 5 — Run on each Lab PC
+Double-click `dist/agent_setup.exe`.
+
+**First time only**, it will ask you to:
+1. Wait while it auto-detects the Admin PC IP from the broadcast (30s timeout — if not found it will ask you to type the IP manually)
+2. Enter a unique PC ID for this machine (e.g. `PC01`, `PC02`)
+3. Pick which connected USB devices to monitor from a list
+
+It will then write `config.json` automatically, register itself to **auto-start on every Windows boot**, and launch the agent.
+
+**On all future runs** it skips setup and launches the agent directly.
+
+---
+
+## Manual Setup (Advanced)
+
+If you prefer to run without the EXEs:
 
 1) Start MQTT broker (Mosquitto) at `localhost:1883`.
 
@@ -84,7 +148,11 @@ python windows_service.py install
 python windows_service.py start
 ```
 
-4) Open `admin_dashboard/index.html` in a browser.
+4) Open `admin_dashboard/index.html` in a browser (or serve via `python -m http.server 5500` and open `http://localhost:5500/login.html`).
+
+5) Make sure `const API_BASE` in `admin_dashboard/dashboard.js` points to the correct server URL.
+
+---
 
 ## Config notes
 
@@ -130,12 +198,12 @@ python windows_service.py start
   - One row per `(lab_id, pc_id, device_id)` representing the **latest known state**.
   - Maps to: **current warning/critical status cards** on the dashboard.
   - Key columns:
-    - `current_status`, `severity`, `alert_status` – snapshot shown in the “Current Device States” grid.
-    - `pending_since` – non-null only when the device is in **PENDING debounce window** (used to explain “yellow for 60 seconds” in the demo).
+    - `current_status`, `severity`, `alert_status` – snapshot shown in the "Current Device States" grid.
+    - `pending_since` – non-null only when the device is in **PENDING debounce window** (used to explain "yellow for 60 seconds" in the demo).
     - `updated_at` – last server-side update time for that device.
 - `pc_heartbeat` (PC online/offline)
   - One row per `(lab_id, pc_id)` updated whenever the agent publishes a `status` message or when the MQTT Last Will & Testament fires.
-  - Maps to: **PC online/offline status** in the dashboard’s PC status panel.
+  - Maps to: **PC online/offline status** in the dashboard's PC status panel.
   - Key columns:
     - `pc_status` – high-level state such as `online` / `offline`.
     - `last_seen` – timestamp originating from the agent (if present).
@@ -162,7 +230,7 @@ WHERE lab_id = 'LAB1' AND pc_id = 'PC1' AND severity = 'CRITICAL'
 ORDER BY received_at DESC
 LIMIT 20;
 
--- 2) Current state of all devices in a lab (good for “current dashboard” screenshots)
+-- 2) Current state of all devices in a lab (good for "current dashboard" screenshots)
 SELECT lab_id, pc_id, device_id, device_type, current_status, severity, alert_status, pending_since, updated_at
 FROM device_state_current
 WHERE lab_id = 'LAB1'
@@ -209,11 +277,11 @@ These commands print nicely formatted summaries that are easy to screenshot and 
   - `config.py` holds all tunable settings (MQTT, DB path, timeouts).
 - **Presentation layer – Admin dashboard (`admin_dashboard/`)**
   - `index.html`, `styles.css`, and `dashboard.js` implement a small SPA-like page.
-  - Pulls JSON from the server’s REST APIs to render:
+  - Pulls JSON from the server's REST APIs to render:
     - PC heartbeat cards (online/offline by lab).
     - Current device state cards (severity colour + PENDING vs OPEN).
     - Recent events/alerts table with an audible alarm for new `CRITICAL` events.
-   - Access is restricted to a single admin username/password, which the page exchanges for a short-lived header token (`x-admin-token`) via `POST /auth/login`.
+  - Access is restricted to a single admin username/password, which the page exchanges for a short-lived header token (`x-admin-token`) via `POST /auth/login`.
 
 ## End-to-end workflow tied to code
 
@@ -232,8 +300,8 @@ These commands print nicely formatted summaries that are easy to screenshot and 
      - Checks for entries that have exceeded the timeout.
      - Promotes them to `CRITICAL` + `OPEN` both in `device_state_current` and `device_events`, including `debounce_seconds` in `details_json`.
 4. **PC powered off / disconnected**
-   - When a PC goes down unexpectedly, the broker publishes the agent’s LWT on the `status` topic.
-   - The server’s `handle_status(...)` updates `pc_heartbeat` through `Database.upsert_heartbeat(...)`, flipping that PC to an offline state with timestamps.
+   - When a PC goes down unexpectedly, the broker publishes the agent's LWT on the `status` topic.
+   - The server's `handle_status(...)` updates `pc_heartbeat` through `Database.upsert_heartbeat(...)`, flipping that PC to an offline state with timestamps.
 5. **Dashboard rendering**
    - `dashboard.js` calls:
      - `GET /labs/{lab_id}/pcs` → shows PC heartbeat cards (online vs offline).
@@ -254,15 +322,11 @@ These commands print nicely formatted summaries that are easy to screenshot and 
     - `AATS_USB_TIMEOUT_SEC`, `AATS_BT_TIMEOUT_SEC` as needed for your lab policy.
   - Install dependencies and start FastAPI with Uvicorn as shown in the **Setup** section.
 - **Agent deployment on each lab PC**
-  - Edit `student_agent/config.json` to:
-    - Set `lab_id`, `pc_id`, and MQTT broker connection details.
-    - List tracked USB `VID/PID` values and Bluetooth device MAC addresses.
-  - Install dependencies and either:
-    - Run `python main.py` in a console for quick testing, or
-    - Install as a Windows service (see `windows_service.py`) so it auto-starts on boot.
+  - Run `dist/agent_setup.exe` once to auto-configure and register auto-start on boot.
+  - For manual setup, edit `student_agent/config.json` to set `lab_id`, `pc_id`, broker IP, and tracked device list.
 - **Dashboard deployment**
-  - Host `admin_dashboard/` from any simple HTTP server or open `index.html` directly in a browser on the admin PC.
-  - Ensure the `API_BASE` in `dashboard.js` points to the correct FastAPI server URL.
+  - Served automatically by `dist/admin_setup.exe`.
+  - For manual setup, host `admin_dashboard/` from any simple HTTP server and ensure `API_BASE` in `dashboard.js` points to the correct FastAPI server URL.
 - **Time synchronization**
   - Use Windows Time service or an NTP client on all lab PCs and the server.
   - This keeps `observed_at`, `agent_time`, `received_at`, and CCTV timestamps aligned for forensic analysis.
@@ -286,3 +350,24 @@ These commands print nicely formatted summaries that are easy to screenshot and 
 - **Agent coverage**
   - The current agent monitors a curated list of USB/Bluetooth devices.
   - Extending coverage to Wi-Fi adapters, storage devices, or system processes would require additional collectors in `student_agent/`.
+
+## Future Works
+
+### 1. Scoped Firewall Rules
+Currently the setup EXE opens ports to the entire local subnet. Future versions should scope the firewall rules to only known lab PC IP ranges:
+```
+remoteip=192.******/24
+```
+
+### 2. MQTT Authentication
+Add password protection to Mosquitto so only authorized agents can connect:
+- Set `allow_anonymous false` in `mosquitto.conf`
+- Create agent credentials: `mosquitto_passwd -c C:\mosquitto\passwd labagent`
+- Add `mqtt_username` and `mqtt_password` fields to `student_agent/config.json`
+- Update `student_agent/mqtt_client.py` to send credentials on connect
+
+### 3. FastAPI Rate Limiting
+Add a rate limiter to the `POST /auth/login` endpoint to prevent brute force attacks on the admin token. Use the `slowapi` library.
+
+### 4. Dashboard Improvements
+Improve the admin dashboard UI with richer filtering, charts, and a more polished visual design.
