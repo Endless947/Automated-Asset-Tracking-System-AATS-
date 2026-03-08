@@ -371,3 +371,11 @@ Add a rate limiter to the `POST /auth/login` endpoint to prevent brute force att
 
 ### 4. Dashboard Improvements
 Improve the admin dashboard UI with richer filtering, charts, and a more polished visual design.
+
+### 5. Agent exe improvements
+add a feautre to auto detect the usb devices maybe have user plug in and plug out the devices.
+make it so the exe can be closed and the agent still works
+the auto ip detection from admin pc does not work
+
+### 6. PC switched off
+need to find solution to what if the device is stollen after the pc is turned off, maybe shift the dectection from pc to a microcontroller like arduino or esp32 or rasbery pie
