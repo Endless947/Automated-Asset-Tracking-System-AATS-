@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AATS - Device Details</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <a href="index.html" class="sys-title">Smart Lab Monitoring System</a>
+      <span class="room-title" id="deviceBreadcrumb">... / ...</span>
+    </div>
+    <div class="topbar-right">
+      <a href="#" onclick="history.back(); return false;" class="btn btn-outline" style="margin-right: 8px;">Back to Room</a>
+      <span class="badge status-ok">System Admin</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="device-header">
+      <div class="device-icon-large" id="deviceIcon">
+        ?
+      </div>
+      <div class="device-info">
+        <h1 id="deviceNameTitle">Loading Device...</h1>
+        <div style="margin-top: 8px;"><span id="deviceStatusBadge" class="badge">Loading</span></div>
+      </div>
+    </div>
+
+    <h2>System Information</h2>
+    <div class="info-grid" style="margin-top: var(--spacing-sm);">
+      <div class="info-item">
+        <span class="info-label">Device ID / MAC</span>
+        <span class="info-value" id="infoId">...</span>
+      </div>
+      <div class="info-item">
+        <span class="info-label">Interface Type</span>
+        <span class="info-value" id="infoType">...</span>
+      </div>
+      <div class="info-item">
+        <span class="info-label">Host PC ID</span>
+        <span class="info-value" id="infoHost">...</span>
+      </div>
+      <div class="info-item">
+        <span class="info-label">Signal / RSSI</span>
+        <span class="info-value" id="infoRssi">...</span>
+      </div>
+      <div class="info-item">
+        <span class="info-label">Current Alert State</span>
+        <span class="info-value" id="infoAlert">...</span>
+      </div>
+      <div class="info-item">
+        <span class="info-label">Last Updated Status</span>
+        <span class="info-value" id="infoUpdated">...</span>
+      </div>
+    </div>
+
+    <h2 style="margin-top: var(--spacing-xl);">Event History</h2>
+    <p style="color:var(--text-secondary); font-size: 0.875rem; margin-bottom: var(--spacing-md);">Recent connection and alert state changes for this specific asset.</p>
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Time Received</th>
+            <th>Connection Status</th>
+            <th>Alert State</th>
+            <th>Technical Details</th>
+          </tr>
+        </thead>
+        <tbody id="deviceEventsBody">
+          <tr><td colspan="4" class="empty-state">Loading history...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

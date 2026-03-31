@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AATS - Room Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="dashboard-layout">
+    <aside class="sidebar">
+      <div>
+        <h2 style="margin-bottom: var(--spacing-sm);">Room Overview</h2>
+        <p style="color: var(--text-secondary); font-size: 0.875rem;">Real-time asset tracking and PC agent states.</p>
+      </div>
+
+      <div class="stat-block">
+        <span class="stat-label">Total PCs</span>
+        <div class="stat-value" id="totalPcsCount">-</div>
+      </div>
+
+      <div class="stat-block">
+        <span class="stat-label">Active PCs</span>
+        <div class="stat-value" style="color: var(--status-ok-text);" id="activePcsCount">-</div>
+      </div>
+
+      <div class="stat-block">
+        <span class="stat-label">Total Devices</span>
+        <div class="stat-value" id="totalDevicesCount">-</div>
+      </div>
+
+      <div class="stat-block">
+        <span class="stat-label" style="display:flex; justify-content:space-between; align-items:center;">
+          Critical Errors
+          <span class="badge status-critical" style="margin-left:8px">Alert</span>
+        </span>
+        <div class="stat-value" id="criticalDevicesCount">0</div>
+      </div>
+
+      <div class="form-group" style="margin-top: auto;">
+        <label class="info-label" for="typeFilter" style="margin-bottom: 4px;">Filter Devices</label>
+        <select id="typeFilter">
+          <option value="">All Devices</option>
+          <option value="usb">USB Devices</option>
+          <option value="bluetooth">Bluetooth Devices</option>
+        </select>
+      </div>
+      
+      <a href="index.html" class="btn btn-outline" style="width:100%; margin-top: 16px;">Back to Labs</a>
+    </aside>
+
+    <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
+      <header class="topbar">
+        <div class="topbar-left">
+          <a href="index.html" class="sys-title">Smart Lab Monitoring System</a>
+          <span class="room-title" id="selectedLabName">Loading...</span>
+        </div>
+        <div class="topbar-right">
+          <span class="badge status-ok">System Admin</span>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <h2 style="margin-bottom: var(--spacing-lg);">Device Status</h2>
+        <div id="deviceGrid" class="grid">
+          <div class="empty-state">Loading devices...</div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

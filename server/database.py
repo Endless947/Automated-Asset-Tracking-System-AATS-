@@ -238,3 +238,37 @@ class Database:
                 (lab_id,),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def list_labs(self) -> List[Dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.lab_id, COUNT(DISTINCT p.pc_id) as pc_count
+                FROM pc_heartbeat p
+                GROUP BY p.lab_id
+                ORDER BY p.lab_id
+                """
+            ).fetchall()
+            
+            lab_list = []
+            for row in rows:
+                lab_id = row["lab_id"]
+                pc_count = row["pc_count"]
+                device_count = conn.execute("SELECT COUNT(*) FROM device_state_current WHERE lab_id = ?", (lab_id, )).fetchone()[0]
+                status_counts = conn.execute(
+                    """
+                    SELECT current_status, COUNT(*) as cnt 
+                    FROM device_state_current 
+                    WHERE lab_id = ? 
+                    GROUP BY current_status
+                    """, 
+                    (lab_id, )
+                ).fetchall()
+                
+                lab_list.append({
+                    "lab_id": lab_id,
+                    "pc_count": pc_count,
+                    "device_count": device_count,
+                    "status_summary": {s["current_status"]: s["cnt"] for s in status_counts}
+                })
+            return lab_list

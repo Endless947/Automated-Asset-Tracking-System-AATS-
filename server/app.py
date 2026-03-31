@@ -140,13 +140,19 @@ def pending_watcher() -> None:
 @app.on_event("startup")
 def on_startup() -> None:
     global listener
-    listener = MQTTListener(
-        broker=settings.mqtt_broker,
-        port=settings.mqtt_port,
-        on_status=handle_status,
-        on_event=handle_event,
-    )
-    listener.start()
+    try:
+        listener = MQTTListener(
+            broker=settings.mqtt_broker,
+            port=settings.mqtt_port,
+            on_status=handle_status,
+            on_event=handle_event,
+        )
+        listener.start()
+        print("MQTT listener started successfully.")
+    except Exception as e:
+        print(f"Warning: Failed to start MQTT listener. Ensure Mosquitto is running: {e}")
+        listener = None
+        
     threading.Thread(target=pending_watcher, daemon=True).start()
 
 
@@ -166,6 +172,11 @@ def login(body: LoginRequest) -> LoginResult:
     if body.username != settings.admin_username or body.password != settings.admin_password:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     return LoginResult(token=get_admin_token())
+
+
+@app.get("/labs")
+def get_labs(_: None = Depends(require_admin)):
+    return db.list_labs()
 
 
 @app.get("/labs/{lab_id}/devices")
