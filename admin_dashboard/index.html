@@ -1,59 +1,33 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AATS Dashboard</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AATS - Select Lab</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="topbar">
-    <h1>AATS Admin Dashboard</h1>
-    <div id="healthBadge" class="badge">Loading...</div>
+    <div class="topbar-left">
+      <a href="index.html" class="sys-title">AATS Admin Dashboard</a>
+    </div>
+    <div class="topbar-right">
+      <span class="badge status-ok">System Admin</span>
+      <button class="btn btn-outline" onclick="localStorage.removeItem('aats_admin_token'); window.location.href='login.html'">Logout</button>
+    </div>
   </header>
 
-  <section class="filters">
-    <input id="labFilter" placeholder="Lab ID (e.g. LAB1)" value="LAB1" />
-    <input id="pcFilter" placeholder="PC ID (optional)" />
-    <select id="severityFilter">
-      <option value="">All severities</option>
-      <option value="OK">OK</option>
-      <option value="WARNING">WARNING</option>
-      <option value="CRITICAL">CRITICAL</option>
-    </select>
-    <button id="refreshBtn">Refresh</button>
-  </section>
+  <main class="container">
+    <div style="margin-bottom: var(--spacing-lg);">
+      <h1>Select Lab / Room to Monitor</h1>
+      <p style="color: var(--text-secondary); margin-top: var(--spacing-sm);">Choose a location to view connected PCs and asset statuses.</p>
+    </div>
+    
+    <div id="labGrid" class="grid">
+      <div class="empty-state">Loading labs...</div>
+    </div>
+  </main>
 
-  <section>
-    <h2>PC Status (Heartbeat)</h2>
-    <div id="pcStatusGrid" class="grid"></div>
-  </section>
-
-  <section>
-    <h2>Current Device States</h2>
-    <div id="deviceGrid" class="grid"></div>
-  </section>
-
-  <section>
-    <h2>Recent Alerts / Events</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Lab</th>
-          <th>PC</th>
-          <th>Device</th>
-          <th>Type</th>
-          <th>Status</th>
-          <th>Severity</th>
-          <th>Alert</th>
-        </tr>
-      </thead>
-      <tbody id="eventsBody"></tbody>
-    </table>
-  </section>
-
-  <audio id="alertAudio" src="alert.mp3" preload="auto"></audio>
-  <script src="dashboard.js"></script>
+  <script src="script.js"></script>
 </body>
 </html>
