@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 import winreg
+import ctypes
 
 # ── Configuration ──────────────────────────────────────────
 BROADCAST_PORT    = 37020
@@ -26,6 +27,7 @@ BROADCAST_MSG     = "AATS_ADMIN"
 BROADCAST_TIMEOUT = 30   # seconds to wait for admin broadcast before asking manually
 STARTUP_REG_NAME  = "AATSAgent"
 STARTUP_REG_KEY   = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AGENT_SERVICE_NAME = "AATSAgentService"
 # ───────────────────────────────────────────────────────────
 
 
@@ -50,6 +52,14 @@ def get_python() -> str:
         input("Press Enter to exit...")
         sys.exit(1)
     return sys.executable
+
+
+def is_admin() -> bool:
+    """Check if process has Administrator privileges."""
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
 
 
 def config_path(base_dir: str) -> str:
@@ -87,9 +97,54 @@ def unregister_autostart() -> None:
         print(f"[!] Could not remove auto-start: {e}")
 
 
+def service_exists() -> bool:
+    """Return True if the Windows service already exists."""
+    result = subprocess.run(["sc", "query", AGENT_SERVICE_NAME], capture_output=True, text=True)
+    return result.returncode == 0 and "does not exist" not in result.stdout.lower()
+
+
+def setup_windows_service(base_dir: str) -> bool:
+    """Install (if needed) and start the agent as a Windows service."""
+    if not is_admin():
+        print("[!] Not running as Administrator; cannot configure Windows service.")
+        return False
+
+    service_script = os.path.join(base_dir, "student_agent", "windows_service.py")
+    service_dir = os.path.join(base_dir, "student_agent")
+    python = get_python()
+
+    if not os.path.exists(service_script):
+        print("[!] windows_service.py not found; skipping service setup.")
+        return False
+
+    if not service_exists():
+        print("[*] Installing AATS Windows service...")
+        install = subprocess.run([python, service_script, "install"], cwd=service_dir)
+        if install.returncode != 0:
+            print("[!] Service installation failed.")
+            return False
+
+    print("[*] Starting AATS Windows service...")
+    start = subprocess.run([python, service_script, "start"], cwd=service_dir)
+    if start.returncode != 0:
+        print("[!] Service start failed.")
+        return False
+
+    print("[+] Windows service is running.")
+    return True
+
+
 def uninstall(base_dir: str) -> None:
     """Remove auto-start registration and clear config.json."""
     print("\n[*] Uninstalling AATS Agent...")
+    if is_admin() and service_exists():
+        service_script = os.path.join(base_dir, "student_agent", "windows_service.py")
+        service_dir = os.path.join(base_dir, "student_agent")
+        python = get_python()
+        print("[*] Removing Windows service...")
+        subprocess.run([python, service_script, "stop"], cwd=service_dir)
+        subprocess.run([python, service_script, "remove"], cwd=service_dir)
+
     unregister_autostart()
 
     cfg = config_path(base_dir)
@@ -265,21 +320,54 @@ def register_autostart(base_dir: str) -> None:
         print(f"[!] Could not register auto-start: {e}")
 
 
+def setup_startup_mode(base_dir: str) -> str:
+    """
+    Prefer Windows service for true boot-time resilience.
+    Fall back to user logon auto-start via registry.
+    """
+    if setup_windows_service(base_dir):
+        # Service startup makes Run-key startup redundant.
+        unregister_autostart()
+        return "service"
+
+    register_autostart(base_dir)
+    return "registry"
+
+
+def get_startup_status() -> str:
+    """Return a user-facing startup mode status string."""
+    if service_exists():
+        return "Windows service (starts at boot, no user login required)"
+
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0, winreg.KEY_READ
+        )
+        winreg.QueryValueEx(key, STARTUP_REG_NAME)
+        winreg.CloseKey(key)
+        return "Registry startup (starts after this user logs in)"
+    except Exception:
+        return "Not configured"
+
+
 # ── Step 6: Launch the agent ────────────────────────────────
 
 def launch_agent(base_dir: str) -> None:
-    """Start the student agent and wait for it."""
+    """Start the student agent detached so setup window can be closed."""
     main_py   = os.path.join(base_dir, "student_agent", "main.py")
     agent_dir = os.path.join(base_dir, "student_agent")
     python    = get_python()
 
     print("[*] Starting agent...")
-    proc = subprocess.Popen(
+    detached = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+    new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+    subprocess.Popen(
         [python, main_py],
         cwd=agent_dir,
+        creationflags=detached | new_group,
+        close_fds=True,
     )
-    print("[+] Agent is running! Close this window to stop the agent.\n")
-    proc.wait()
+    print("[+] Agent launched in background. You can close this setup window.\n")
 
 
 # ── Main ────────────────────────────────────────────────────
@@ -302,7 +390,15 @@ def main() -> None:
     # ── Run / Setup ──────────────────────────────────────────
     if is_setup_done(base_dir):
         print("\n[+] Setup already complete. Launching agent...\n")
+        if service_exists():
+            if setup_windows_service(base_dir):
+                print(f"[+] Startup status: {get_startup_status()}")
+                print("[+] Service start confirmed. Exiting setup.")
+                input("\nPress Enter to exit...")
+                return
         launch_agent(base_dir)
+        print(f"[+] Startup status: {get_startup_status()}")
+        input("Press Enter to exit...")
         return
 
     print("\n[*] First time setup — let's get this PC configured!\n")
@@ -320,19 +416,28 @@ def main() -> None:
     # Step 4 — Write config.json
     write_config(base_dir, admin_ip, pc_id, usb_devices)
 
-    # Step 5 — Register auto-start on boot
-    register_autostart(base_dir)
+    # Step 5 — Configure startup mode
+    startup_mode = setup_startup_mode(base_dir)
 
     print("\n" + "=" * 52)
     print("  Setup complete!")
     print(f"  Admin IP  : {admin_ip}")
     print(f"  PC ID     : {pc_id}")
     print(f"  Devices   : {len(usb_devices)} USB device(s) configured")
-    print("  Auto-start: registered for Windows boot")
+    if startup_mode == "service":
+        print("  Auto-start: Windows service (boot resilient)")
+    else:
+        print("  Auto-start: registry startup (after user login)")
+    print(f"  Startup status: {get_startup_status()}")
     print("=" * 52 + "\n")
 
     # Step 6 — Launch agent
-    launch_agent(base_dir)
+    if startup_mode == "service":
+        print("[+] Service mode is active. Agent will run independently of this EXE.")
+    else:
+        launch_agent(base_dir)
+
+    input("Press Enter to exit...")
 
 
 if __name__ == "__main__":

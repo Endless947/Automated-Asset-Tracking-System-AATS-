@@ -67,7 +67,15 @@ AATS ships with two setup scripts that handle everything automatically.
 
 ### Prerequisites (install once on every PC)
 - [Python 3.10+](https://www.python.org/downloads/) — make sure to check **"Add Python to PATH"** during install
-- [Mosquitto MQTT Broker](https://mosquitto.org/download/) — install on the **Admin PC only**
+- Mosquitto on Admin PC:
+  - `admin_setup.exe` now tries to auto-install via `winget` if Mosquitto is missing
+  - Offline fallback: place `mosquitto.exe` at `mqtt_broker/mosquitto.exe` in the project root
+  - Optional integrity file for bundled binary: `mqtt_broker/mosquitto.sha256`
+  - If auto-install fails (offline/proxy/no winget), install manually from [Mosquitto MQTT Broker](https://mosquitto.org/download/)
+
+Optional secure installer download mode (Admin PC):
+- Set `AATS_MOSQUITTO_INSTALLER_URL` and `AATS_MOSQUITTO_INSTALLER_SHA256`
+- `admin_setup.exe` will download only if both are set and SHA-256 matches exactly
 
 ### Step 1 — Clone the repo (on every PC)
 ```powershell
@@ -89,11 +97,20 @@ pyinstaller --onefile --uac-admin admin_setup.py
 
 # Lab PC EXE
 pyinstaller --onefile agent_setup.py
+
+# Optional but recommended for service mode:
+# run dist/agent_setup.exe as Administrator once
+
+# Optional offline broker bundle:
+# copy mosquitto.exe to mqtt_broker/mosquitto.exe
+# optionally add mqtt_broker/mosquitto.sha256 with the expected hash
 ```
 Both EXEs will appear in the `dist/` folder.
 
 ### Step 4 — Run on Admin PC
 Double-click `dist/admin_setup.exe` (Windows will ask for Administrator permissions — click Yes).
+
+Note: Admin services are **manual-start only** (no reboot auto-start). The dashboard/server run only when the admin launches `admin_setup.exe`.
 
 It will automatically:
 - Open firewall ports for MQTT and the API
@@ -102,6 +119,7 @@ It will automatically:
 - Serve the admin dashboard
 - Open the dashboard login page in your browser
 - Broadcast its IP address so Lab PCs can find it automatically
+- Print the Mosquitto provisioning source (service/installed/bundled/winget/download) for quick verification
 
 > Login credentials: username `admin`, password `admin`
 
@@ -116,6 +134,14 @@ Double-click `dist/agent_setup.exe`.
 3. Pick which connected USB devices to monitor from a list
 
 It will then write `config.json` automatically, register itself to **auto-start on every Windows boot**, and launch the agent.
+
+Only Lab PC agent components are configured for reboot auto-start.
+
+Startup mode priority on Lab PCs:
+- If run as Administrator, setup installs/starts a Windows service (`AATSAgentService`) for boot-resilient startup.
+- If not Administrator, setup falls back to user registry startup (starts after user login).
+
+The Lab PC setup output now also prints a startup status line so you can confirm the effective mode.
 
 **On all future runs** it skips setup and launches the agent directly.
 

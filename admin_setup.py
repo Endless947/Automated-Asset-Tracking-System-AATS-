@@ -33,13 +33,17 @@ The --uac-admin flag ensures Windows asks for Administrator permissions on launc
 
 import atexit
 import ctypes
+import hashlib
 import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import urllib.request
 import webbrowser
+import winreg
 
 # ── Configuration ──────────────────────────────────────────
 BROADCAST_PORT     = 37020        # UDP port used to announce admin IP to agents
@@ -49,6 +53,11 @@ DASHBOARD_PORT     = 5500
 API_PORT           = 8000
 MQTT_PORT          = 1883
 MOSQUITTO_PATH     = r"C:\Program Files\mosquitto\mosquitto.exe"
+MOSQUITTO_ALT_PATH = r"C:\Program Files (x86)\mosquitto\mosquitto.exe"
+MOSQUITTO_BUNDLED_REL_PATH = os.path.join("mqtt_broker", "mosquitto.exe")
+MOSQUITTO_BUNDLED_SHA_FILE = os.path.join("mqtt_broker", "mosquitto.sha256")
+STARTUP_REG_KEY    = r"Software\Microsoft\Windows\CurrentVersion\Run"
+LEGACY_ADMIN_STARTUP_NAMES = ("AATSAdmin", "AATSAdminSetup", "admin_setup")
 # ───────────────────────────────────────────────────────────
 
 
@@ -117,7 +126,168 @@ def open_firewall_ports() -> None:
     print("[+] Firewall rules configured.")
 
 
-def start_mosquitto() -> subprocess.Popen | None:
+def find_mosquitto_path() -> str | None:
+    """Return first detected Mosquitto executable path, if installed."""
+    for candidate in (MOSQUITTO_PATH, MOSQUITTO_ALT_PATH):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def sha256_file(path: str) -> str:
+    """Compute SHA-256 for a file."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().lower()
+
+
+def read_hash_from_file(path: str) -> str | None:
+    """Read first hash token from a .sha256 text file."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            line = f.readline().strip()
+        if not line:
+            return None
+        token = line.split()[0].strip().lower()
+        if len(token) == 64:
+            return token
+    except Exception:
+        pass
+    return None
+
+
+def verify_sha256(path: str, expected_hash: str) -> bool:
+    """Return True if file hash exactly matches expected SHA-256."""
+    actual = sha256_file(path)
+    return actual == expected_hash.strip().lower()
+
+
+def find_bundled_mosquitto_path(base_dir: str) -> str | None:
+    """Return bundled Mosquitto path if present and hash-valid when provided."""
+    bundled_path = os.path.join(base_dir, MOSQUITTO_BUNDLED_REL_PATH)
+    if not os.path.exists(bundled_path):
+        return None
+
+    # Optional integrity sources: env var overrides sha file.
+    expected_hash = os.environ.get("AATS_MOSQUITTO_BUNDLED_SHA256", "").strip().lower()
+    if not expected_hash:
+        expected_hash = read_hash_from_file(os.path.join(base_dir, MOSQUITTO_BUNDLED_SHA_FILE)) or ""
+
+    if expected_hash:
+        if not verify_sha256(bundled_path, expected_hash):
+            print("[!] Bundled Mosquitto hash verification failed. Skipping bundled binary.")
+            return None
+        print("[+] Bundled Mosquitto hash verified.")
+    else:
+        print("[!] Bundled Mosquitto found without SHA-256 metadata. Using it anyway.")
+
+    return bundled_path
+
+
+def install_mosquitto_with_winget() -> bool:
+    """Attempt to install Mosquitto using winget on supported systems."""
+    print("[*] Attempting automatic Mosquitto install with winget...")
+    check = subprocess.run(["where", "winget"], capture_output=True, text=True)
+    if check.returncode != 0:
+        print("[!] winget is not available on this machine.")
+        return False
+
+    cmd = [
+        "winget",
+        "install",
+        "-e",
+        "--id",
+        "EclipseMosquitto.Mosquitto",
+        "--accept-package-agreements",
+        "--accept-source-agreements",
+    ]
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print("[!] winget install failed.")
+        return False
+
+    print("[+] Mosquitto installed via winget.")
+    return True
+
+
+def install_mosquitto_from_verified_download() -> bool:
+    """
+    Secure download/install path.
+    Requires BOTH env vars:
+      AATS_MOSQUITTO_INSTALLER_URL
+      AATS_MOSQUITTO_INSTALLER_SHA256
+    """
+    url = os.environ.get("AATS_MOSQUITTO_INSTALLER_URL", "").strip()
+    expected_hash = os.environ.get("AATS_MOSQUITTO_INSTALLER_SHA256", "").strip().lower()
+
+    if not url or not expected_hash:
+        return False
+
+    if len(expected_hash) != 64:
+        print("[!] AATS_MOSQUITTO_INSTALLER_SHA256 is invalid (must be 64 hex chars).")
+        return False
+
+    print("[*] Attempting verified Mosquitto installer download...")
+    tmp_dir = tempfile.gettempdir()
+    installer_path = os.path.join(tmp_dir, "aats-mosquitto-installer.exe")
+
+    try:
+        urllib.request.urlretrieve(url, installer_path)
+    except Exception as e:
+        print(f"[!] Download failed: {e}")
+        return False
+
+    if not verify_sha256(installer_path, expected_hash):
+        print("[!] Downloaded installer SHA-256 mismatch. Refusing to execute.")
+        try:
+            os.remove(installer_path)
+        except Exception:
+            pass
+        return False
+
+    print("[+] Installer SHA-256 verified.")
+    result = subprocess.run([installer_path, "/S"])
+    try:
+        os.remove(installer_path)
+    except Exception:
+        pass
+
+    if result.returncode != 0:
+        print("[!] Silent installer failed.")
+        return False
+
+    print("[+] Mosquitto installed via verified download.")
+    return True
+
+
+def ensure_admin_manual_start_only() -> None:
+    """Remove legacy admin auto-start entries if they exist."""
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0, winreg.KEY_SET_VALUE
+        )
+    except Exception:
+        return
+
+    try:
+        removed_any = False
+        for name in LEGACY_ADMIN_STARTUP_NAMES:
+            try:
+                winreg.DeleteValue(key, name)
+                removed_any = True
+            except FileNotFoundError:
+                pass
+        if removed_any:
+            print("[+] Cleared legacy Admin auto-start entries (Admin remains manual-start).")
+    finally:
+        winreg.CloseKey(key)
+
+
+def start_mosquitto(base_dir: str) -> tuple[subprocess.Popen | None, str]:
     """Start the Mosquitto MQTT broker."""
     print("[*] Starting Mosquitto broker...")
 
@@ -127,27 +297,96 @@ def start_mosquitto() -> subprocess.Popen | None:
     )
     if "RUNNING" in check.stdout:
         print("[+] Mosquitto already running.")
-        return None
+        return None, "service-running"
 
     # Try starting as a Windows service
     result = os.system("net start mosquitto >nul 2>&1")
     if result == 0:
         print("[+] Mosquitto started as a service.")
-        return None
+        return None, "service-started"
 
-    # Fall back to running the exe directly
-    if os.path.exists(MOSQUITTO_PATH):
+    # Fall back to running a detected installed exe directly.
+    mosquitto_path = find_mosquitto_path()
+    if mosquitto_path:
         proc = subprocess.Popen(
-            [MOSQUITTO_PATH, "-v"],
+            [mosquitto_path, "-v"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         print("[+] Mosquitto started directly.")
-        return proc
+        return proc, "installed-exe"
 
-    print("[!] Mosquitto not found! Please install it from https://mosquitto.org/download/")
+    # Offline fallback: use bundled broker if present.
+    bundled = find_bundled_mosquitto_path(base_dir)
+    if bundled:
+        proc = subprocess.Popen(
+            [bundled, "-v"],
+            cwd=os.path.dirname(bundled),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("[+] Bundled Mosquitto started directly.")
+        return proc, "bundled-exe"
+
+    # Try to auto-install with winget, then retry service/path startup.
+    if install_mosquitto_with_winget():
+        time.sleep(2)
+        if os.system("net start mosquitto >nul 2>&1") == 0:
+            print("[+] Mosquitto started as a service after installation.")
+            return None, "winget-install-service"
+
+        mosquitto_path = find_mosquitto_path()
+        if mosquitto_path:
+            proc = subprocess.Popen(
+                [mosquitto_path, "-v"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print("[+] Mosquitto started directly after installation.")
+            return proc, "winget-install-exe"
+
+    # Final auto path: verified installer download if env vars are provided.
+    if install_mosquitto_from_verified_download():
+        time.sleep(2)
+        if os.system("net start mosquitto >nul 2>&1") == 0:
+            print("[+] Mosquitto started as a service after verified installation.")
+            return None, "verified-download-service"
+
+        mosquitto_path = find_mosquitto_path()
+        if mosquitto_path:
+            proc = subprocess.Popen(
+                [mosquitto_path, "-v"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print("[+] Mosquitto started directly after verified installation.")
+            return proc, "verified-download-exe"
+
+    print("[!] Mosquitto not found and auto-install failed.")
+    print("    Optional secure download env vars:")
+    print("      AATS_MOSQUITTO_INSTALLER_URL")
+    print("      AATS_MOSQUITTO_INSTALLER_SHA256")
+    print("    Optional bundled broker path:")
+    print("      mqtt_broker/mosquitto.exe (+ optional mqtt_broker/mosquitto.sha256)")
+    print("    Please install it manually from https://mosquitto.org/download/")
     input("Press Enter to exit...")
     sys.exit(1)
+
+
+def print_mosquitto_provisioning_status(source: str) -> None:
+    """Print a concise self-check line indicating broker provisioning source."""
+    labels = {
+        "service-running": "Windows service already running",
+        "service-started": "Windows service start",
+        "installed-exe": "Installed executable path",
+        "bundled-exe": "Bundled offline executable",
+        "winget-install-service": "winget install + Windows service",
+        "winget-install-exe": "winget install + executable path",
+        "verified-download-service": "Verified download + Windows service",
+        "verified-download-exe": "Verified download + executable path",
+    }
+    label = labels.get(source, source)
+    print(f"[+] Mosquitto provisioning path: {label}")
 
 
 def start_fastapi(base_dir: str) -> subprocess.Popen:
@@ -238,9 +477,13 @@ def main() -> None:
     ip = get_local_ip()
     print(f"[+] Admin PC IP detected: {ip}")
 
+    # Admin dashboard should only run when admin explicitly starts it.
+    ensure_admin_manual_start_only()
+
     # Setup
     open_firewall_ports()
-    mosquitto_proc = start_mosquitto()
+    mosquitto_proc, mosquitto_source = start_mosquitto(base_dir)
+    print_mosquitto_provisioning_status(mosquitto_source)
     time.sleep(2)  # give Mosquitto a moment to initialise
 
     fastapi_proc   = start_fastapi(base_dir)
@@ -267,6 +510,7 @@ def main() -> None:
     print(f"  Dashboard : http://localhost:{DASHBOARD_PORT}/login.html")
     print(f"  API       : http://localhost:{API_PORT}")
     print(f"  MQTT      : {ip}:{MQTT_PORT}")
+    print(f"  MQTT Path : {mosquitto_source}")
     print(f"  Broadcast : sending IP every {BROADCAST_INTERVAL}s")
     print("=" * 52)
     print("\n  Press Ctrl+C or close this window to stop all services.\n")
