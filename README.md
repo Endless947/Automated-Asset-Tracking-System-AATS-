@@ -72,6 +72,9 @@ AATS ships with two setup scripts that handle everything automatically.
   - Offline fallback: place `mosquitto.exe` at `mqtt_broker/mosquitto.exe` in the project root
   - Optional integrity file for bundled binary: `mqtt_broker/mosquitto.sha256`
   - If auto-install fails (offline/proxy/no winget), install manually from [Mosquitto MQTT Broker](https://mosquitto.org/download/)
+- Lab PC agent connection requirements:
+  - `agent_setup.exe` does **not** install Mosquitto locally
+  - It only needs the Admin PC broker address and the tracked device config
 
 Optional secure installer download mode (Admin PC):
 - Set `AATS_MOSQUITTO_INSTALLER_URL` and `AATS_MOSQUITTO_INSTALLER_SHA256`
@@ -101,9 +104,6 @@ pyinstaller --onefile agent_setup.py
 # Optional but recommended for service mode:
 # run dist/agent_setup.exe as Administrator once
 
-# Optional offline broker bundle:
-# copy mosquitto.exe to mqtt_broker/mosquitto.exe
-# optionally add mqtt_broker/mosquitto.sha256 with the expected hash
 ```
 Both EXEs will appear in the `dist/` folder.
 
