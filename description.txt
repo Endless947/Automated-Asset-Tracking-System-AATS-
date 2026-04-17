@@ -168,7 +168,7 @@ L37–L53: Recent Alerts / Events table.
 L56: `<audio id="alertAudio" src="alert.mp3" preload="auto"></audio>`
 - Hidden audio element for playing an alert sound when new critical events arrive.
 
-L57: `<script src="dashboard.js"></script>`
+L57: `<script src="script.js"></script>`
 - Loads the JavaScript logic.
 
 L58–L59: Closes `body` and `html`.
@@ -221,7 +221,7 @@ L75–L76: End of body and html.
 
 
 --------------------------------------------------------------------------------
-admin_dashboard/dashboard.js
+admin_dashboard/script.js
 --------------------------------------------------------------------------------
 
 Top‑level constants:

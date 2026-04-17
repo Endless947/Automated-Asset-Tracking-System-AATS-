@@ -1,7 +1,7 @@
 {
   "lab_id": "LAB1",
   "pc_id": "PC12",
-  "broker": "",// ip of admin pc
+  "broker": "",
   "port": 1883,
   "scan_interval_sec": 2,
   "heartbeat_interval_sec": 30,
@@ -12,8 +12,7 @@
       "vid": "",
       "pid": "",
       "alias": ""
-    }//fill according to your usb devices, you can find vid and pid in device manager
-    
+    }
   ],
   "bluetooth_devices": []
 }

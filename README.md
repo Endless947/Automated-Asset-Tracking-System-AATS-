@@ -150,7 +150,7 @@ python windows_service.py start
 
 4) Open `admin_dashboard/index.html` in a browser (or serve via `python -m http.server 5500` and open `http://localhost:5500/login.html`).
 
-5) Make sure `const API_BASE` in `admin_dashboard/dashboard.js` points to the correct server URL.
+5) Make sure `const API_BASE` in `admin_dashboard/script.js` points to the correct server URL.
 
 ---
 
@@ -276,7 +276,7 @@ These commands print nicely formatted summaries that are easy to screenshot and 
     - Persists history and live state into SQLite through `Database` in `database.py`.
   - `config.py` holds all tunable settings (MQTT, DB path, timeouts).
 - **Presentation layer – Admin dashboard (`admin_dashboard/`)**
-  - `index.html`, `styles.css`, and `dashboard.js` implement a small SPA-like page.
+  - `index.html`, `styles.css`, and `script.js` implement a small SPA-like page.
   - Pulls JSON from the server's REST APIs to render:
     - PC heartbeat cards (online/offline by lab).
     - Current device state cards (severity colour + PENDING vs OPEN).
@@ -303,7 +303,7 @@ These commands print nicely formatted summaries that are easy to screenshot and 
    - When a PC goes down unexpectedly, the broker publishes the agent's LWT on the `status` topic.
    - The server's `handle_status(...)` updates `pc_heartbeat` through `Database.upsert_heartbeat(...)`, flipping that PC to an offline state with timestamps.
 5. **Dashboard rendering**
-   - `dashboard.js` calls:
+  - `script.js` calls:
      - `GET /labs/{lab_id}/pcs` → shows PC heartbeat cards (online vs offline).
      - `GET /labs/{lab_id}/devices` → shows current device cards, including `pending_since` for devices in the debounce window.
      - `GET /events` → shows the historical timeline of events.
@@ -326,7 +326,7 @@ These commands print nicely formatted summaries that are easy to screenshot and 
   - For manual setup, edit `student_agent/config.json` to set `lab_id`, `pc_id`, broker IP, and tracked device list.
 - **Dashboard deployment**
   - Served automatically by `dist/admin_setup.exe`.
-  - For manual setup, host `admin_dashboard/` from any simple HTTP server and ensure `API_BASE` in `dashboard.js` points to the correct FastAPI server URL.
+  - For manual setup, host `admin_dashboard/` from any simple HTTP server and ensure `API_BASE` in `script.js` points to the correct FastAPI server URL.
 - **Time synchronization**
   - Use Windows Time service or an NTP client on all lab PCs and the server.
   - This keeps `observed_at`, `agent_time`, `received_at`, and CCTV timestamps aligned for forensic analysis.
