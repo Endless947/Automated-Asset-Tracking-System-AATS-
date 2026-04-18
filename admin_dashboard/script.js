@@ -66,7 +66,11 @@ if (isLoginPage) {
         localStorage.setItem("aats_admin_token", res.token);
         window.location.href = "index.html";
       } catch (err) {
-        errorDiv.textContent = "Invalid credentials or server unavailable.";
+        if (err instanceof TypeError || /fetch|network|failed to fetch|connection refused/i.test(err.message)) {
+          errorDiv.textContent = "Admin API is not running. Start admin_setup.exe as Administrator, or run the FastAPI server on port 8000.";
+        } else {
+          errorDiv.textContent = "Invalid credentials.";
+        }
         errorDiv.style.display = "block";
       }
     });

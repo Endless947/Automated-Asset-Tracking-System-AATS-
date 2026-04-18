@@ -21,7 +21,7 @@ The --uac-admin flag ensures Windows asks for Administrator permissions on launc
 #    Add password protection to Mosquitto so only authorized
 #    agents can connect:
 #    - Set allow_anonymous false in mosquitto.conf
-#    - Create credentials: mosquitto_passwd -c C:\mosquitto\passwd labagent
+#    - Create credentials: mosquitto_passwd -c C:\\mosquitto\\passwd labagent
 #    - Add mqtt_username and mqtt_password to agent config.json
 #    - Update mqtt_client.py in student_agent to send credentials
 #
@@ -396,11 +396,54 @@ def start_fastapi(base_dir: str) -> subprocess.Popen:
     proc = subprocess.Popen(
         [get_python(), "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", str(API_PORT)],
         cwd=server_dir,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
     )
+    time.sleep(2)
+    if proc.poll() is not None:
+        print("[!] FastAPI server exited during startup. Check the console output above for the traceback.")
     print("[+] FastAPI server started.")
     return proc
+
+
+def ensure_server_requirements(base_dir: str) -> None:
+    """Install the server-side Python requirements if uvicorn is missing."""
+    python_exe = get_python()
+    check = subprocess.run(
+        [python_exe, "-c", "import uvicorn"],
+        capture_output=True,
+        text=True,
+    )
+    if check.returncode == 0:
+        return
+
+    server_dir = os.path.join(base_dir, "server")
+    requirements_path = os.path.join(server_dir, "requirements.txt")
+    print("[*] Installing FastAPI server dependencies...")
+    result = subprocess.run(
+        [python_exe, "-m", "pip", "install", "-r", requirements_path],
+        cwd=server_dir,
+    )
+    if result.returncode != 0:
+        print("[!] Failed to install server dependencies.")
+        print(f"    Required file: {requirements_path}")
+        input("Press Enter to exit...")
+        sys.exit(1)
+    print("[+] FastAPI server dependencies installed.")
+
+
+def wait_for_api_ready(timeout_sec: int = 20) -> bool:
+    """Wait until the FastAPI health endpoint responds successfully."""
+    deadline = time.time() + timeout_sec
+    health_url = f"http://127.0.0.1:{API_PORT}/health"
+
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(health_url, timeout=2) as response:
+                if response.status == 200:
+                    return True
+        except Exception:
+            time.sleep(1)
+
+    return False
 
 
 def start_dashboard(base_dir: str) -> subprocess.Popen:
@@ -486,7 +529,16 @@ def main() -> None:
     print_mosquitto_provisioning_status(mosquitto_source)
     time.sleep(2)  # give Mosquitto a moment to initialise
 
+    ensure_server_requirements(base_dir)
+
     fastapi_proc   = start_fastapi(base_dir)
+    if not wait_for_api_ready():
+        print(f"[!] FastAPI did not become ready on port {API_PORT}.")
+        print("    Check the console output above for import errors or startup failures.")
+        input("Press Enter to exit...")
+        shutdown([fastapi_proc], threading.Event())
+        sys.exit(1)
+
     dashboard_proc = start_dashboard(base_dir)
     time.sleep(3)  # give servers a moment to start
 
