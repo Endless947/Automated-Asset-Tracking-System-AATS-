@@ -94,6 +94,11 @@ def handle_event(payload: Dict) -> None:
                 alert_status="CLOSED",
                 details={"resolved_pending_started_at": pending_event["started_at"], "reason": "glitch_resolved"},
             )
+            # remove persisted pending entry
+            try:
+                db.delete_pending(key)
+            except Exception:
+                pass
         return
 
     timeout_sec = timeout_for(payload)
@@ -110,6 +115,11 @@ def handle_event(payload: Dict) -> None:
                 "payload": payload,
                 "confirmed": False,
             }
+            # persist pending window so it survives restart
+            try:
+                db.save_pending(key, pending[key])
+            except Exception:
+                pass
         pending_state = pending[key]
         pending_since = datetime.fromtimestamp(pending_state["started_at"], tz=timezone.utc).isoformat()
 
@@ -133,6 +143,11 @@ def pending_watcher() -> None:
             payload = item["payload"]
             db.upsert_device_state(payload, severity="CRITICAL", alert_status="OPEN", pending_since=None)
             db.insert_event(payload, severity="CRITICAL", alert_status="OPEN", details={"debounce_seconds": item["timeout_sec"]})
+            # remove persisted pending entry after promotion
+            try:
+                db.delete_pending((payload["lab_id"], payload["pc_id"], payload["device_id"]))
+            except Exception:
+                pass
 
         time.sleep(1)
 
@@ -152,7 +167,19 @@ def on_startup() -> None:
     except Exception as e:
         print(f"Warning: Failed to start MQTT listener. Ensure Mosquitto is running: {e}")
         listener = None
-        
+    # Restore persisted pending windows from DB (if any)
+    try:
+        restored = db.load_pending()
+        with _pending_lock:
+            for k, v in restored.items():
+                # ensure payload exists
+                if v.get("payload") is None:
+                    v["payload"] = None
+                pending[k] = v
+        print(f"Restored {len(restored)} pending windows from database.")
+    except Exception as e:
+        print(f"Warning: failed to restore pending windows: {e}")
+
     threading.Thread(target=pending_watcher, daemon=True).start()
 
 
@@ -186,6 +213,10 @@ def get_lab_devices(lab_id: str, _: None = Depends(require_admin)):
 
 @app.get("/labs/{lab_id}/pcs")
 def get_lab_pcs(lab_id: str, _: None = Depends(require_admin)):
+    try:
+        db.mark_stale_pcs(lab_id, settings.heartbeat_staleness_timeout_sec)
+    except Exception:
+        pass
     return db.list_pc_heartbeat(lab_id)
 
 

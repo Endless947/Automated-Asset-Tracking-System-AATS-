@@ -520,6 +520,19 @@ def main() -> None:
     ip = get_local_ip()
     print(f"[+] Admin PC IP detected: {ip}")
 
+    # Run DB migrations (if present) so existing installations are upgraded automatically
+    migrate_script = os.path.join(base_dir, "server", "migrate_add_pending.py")
+    if os.path.exists(migrate_script):
+        print("[*] Applying database migrations (if needed)...")
+        try:
+            res = subprocess.run([get_python(), migrate_script], cwd=os.path.join(base_dir, "server"))
+            if res.returncode == 0:
+                print("[+] Database migration completed.")
+            else:
+                print("[!] Database migration script exited with a non-zero status. Continuing startup.")
+        except Exception as e:
+            print(f"[!] Failed to run migration script: {e}. Continuing startup.")
+
     # Admin dashboard should only run when admin explicitly starts it.
     ensure_admin_manual_start_only()
 

@@ -1,5 +1,7 @@
 /* admin_dashboard/script.js */
 const API_BASE = "http://127.0.0.1:8000";
+// Client-side staleness threshold (ms). Matches server default `AATS_HEARTBEAT_STALENESS_SEC` (120s).
+const HEARTBEAT_STALE_MS = 120 * 1000;
 
 let adminToken = localStorage.getItem("aats_admin_token");
 const isLoginPage = window.location.pathname.endsWith("login.html");
@@ -143,6 +145,13 @@ if (window.location.pathname.endsWith("dashboard.html")) {
 
   async function loadDashboard() {
     try {
+      // Clear UI while fetching to avoid showing stale cards
+      document.getElementById("totalPcsCount").textContent = "…";
+      document.getElementById("totalDevicesCount").textContent = "…";
+      document.getElementById("activePcsCount").textContent = "…";
+      const grid = document.getElementById("deviceGrid");
+      grid.innerHTML = `<div class="loading">Loading…</div>`;
+      
       const [pcs, devices] = await Promise.all([
         fetchJson(`${API_BASE}/labs/${encodeURIComponent(labId)}/pcs`),
         fetchJson(`${API_BASE}/labs/${encodeURIComponent(labId)}/devices`)
@@ -182,10 +191,15 @@ if (window.location.pathname.endsWith("dashboard.html")) {
         card.className = "card";
         card.href = `device.html?lab=${encodeURIComponent(labId)}&pc=${encodeURIComponent(d.pc_id)}&device=${encodeURIComponent(d.device_id)}`;
         
+        // Determine if this device state is stale (server time vs client time may differ)
+        const updatedAt = Date.parse(d.updated_at);
+        const isStale = Number.isFinite(updatedAt) && (Date.now() - updatedAt) > HEARTBEAT_STALE_MS;
+
         card.innerHTML = `
           <div class="card-header">
             <div class="card-title">${d.device_label || d.device_id}</div>
             <span class="badge ${severityClass(d.severity)}">${d.current_status || 'UNKNOWN'}</span>
+            ${isStale ? `<span class="badge status-offline" style="margin-left:8px">STALE</span>` : ''}
           </div>
           <p class="meta-info">Type: <strong>${d.device_type}</strong></p>
           <p class="meta-info">PC Host: ${d.pc_id}</p>
@@ -253,6 +267,13 @@ if (window.location.pathname.endsWith("device.html")) {
       document.getElementById("infoRssi").textContent = device.rssi != null ? `${device.rssi} dBm` : 'N/A';
       document.getElementById("infoUpdated").textContent = new Date(device.updated_at).toLocaleString();
       document.getElementById("infoAlert").textContent = device.alert_status;
+      // Stale indicator for device detail
+      const updatedAt = Date.parse(device.updated_at);
+      const detailStale = Number.isFinite(updatedAt) && (Date.now() - updatedAt) > HEARTBEAT_STALE_MS;
+      const staleEl = document.getElementById("infoStale");
+      if (staleEl) {
+        staleEl.textContent = detailStale ? 'Stale (no recent heartbeat)' : '';
+      }
 
       // Load Recent Events specific to this device
       const queryParams = new URLSearchParams({
