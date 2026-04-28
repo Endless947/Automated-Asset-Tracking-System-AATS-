@@ -173,6 +173,13 @@ if (window.location.pathname.endsWith("dashboard.html")) {
         fetchJson(`${API_BASE}/labs/${encodeURIComponent(labId)}/devices`)
       ]);
 
+      // Check for new critical devices and play alert if needed
+      try {
+        await checkAndPlayCriticalAlert(devices);
+      } catch (err) {
+        console.error('Alert check failed', err);
+      }
+
       // Update Sidebar Counts
       document.getElementById("totalPcsCount").textContent = pcs.length;
       document.getElementById("totalDevicesCount").textContent = devices.length;
@@ -351,6 +358,145 @@ if (window.location.pathname.endsWith("dashboard.html")) {
   const typeF = document.getElementById("typeFilter");
   if(typeF) typeF.addEventListener("change", loadDashboard);
   
+  // -----------------------------
+  // Alert audio + stop control
+  // -----------------------------
+  let _previousCriticalDevices = new Set();
+  let _suppressedCurrentCriticals = new Set();
+  let _alertAudioEl = null;
+  let _audioContext = null;
+  let _fallbackOscillator = null;
+  let _alertStopRequested = false;
+  let _stopAlertButton = null;
+
+  function ensureStopButton() {
+    if (_stopAlertButton) return;
+    const container = document.querySelector('.topbar-right') || document.body;
+    const btn = document.createElement('button');
+    btn.id = 'stopAlertBtn';
+    btn.className = 'btn btn-danger';
+    btn.textContent = 'Stop Alert';
+    btn.style.marginLeft = '12px';
+    btn.style.display = 'none';
+    btn.addEventListener('click', () => {
+      stopAlert();
+    });
+    _stopAlertButton = btn;
+    container.appendChild(btn);
+  }
+
+  function showStopButton(show) {
+    ensureStopButton();
+    _stopAlertButton.style.display = show ? 'inline-block' : 'none';
+  }
+
+  async function playAlertSound() {
+    _alertStopRequested = false;
+    showStopButton(true);
+
+    // Try HTMLAudioElement loop first
+    try {
+      if (!_alertAudioEl) {
+        _alertAudioEl = new Audio('alert.mp3');
+        _alertAudioEl.loop = true;
+        _alertAudioEl.preload = 'auto';
+      }
+      const playPromise = _alertAudioEl.play();
+      if (playPromise !== undefined) {
+        await playPromise;
+      }
+      return;
+    } catch (err) {
+      console.warn('HTMLAudio play failed, falling back to WebAudio API', err);
+    }
+
+    // Fallback: WebAudio continuous tone
+    try {
+      if (!_audioContext) {
+        _audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (_fallbackOscillator) {
+        // already playing
+        return;
+      }
+      const osc = _audioContext.createOscillator();
+      const gain = _audioContext.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.value = 0.2;
+      osc.connect(gain);
+      gain.connect(_audioContext.destination);
+      osc.start();
+      _fallbackOscillator = { osc, gain };
+    } catch (err) {
+      console.error('Fallback audio failed', err);
+    }
+  }
+
+  function stopAlert() {
+    _alertStopRequested = true;
+    // If audio element playing, stop it
+    try {
+      if (_alertAudioEl) {
+        _alertAudioEl.pause();
+        _alertAudioEl.currentTime = 0;
+      }
+    } catch (err) {
+      console.warn('Stopping HTMLAudio failed', err);
+    }
+
+    // Stop fallback oscillator
+    try {
+      if (_fallbackOscillator) {
+        try { _fallbackOscillator.osc.stop(); } catch (e) {}
+        try { _fallbackOscillator.osc.disconnect(); } catch (e) {}
+        try { _fallbackOscillator.gain.disconnect(); } catch (e) {}
+        _fallbackOscillator = null;
+      }
+    } catch (err) {
+      console.warn('Stopping fallback oscillator failed', err);
+    }
+
+    // Suppress current critical devices until they clear and reappear
+    _suppressedCurrentCriticals = new Set(_previousCriticalDevices);
+    showStopButton(false);
+  }
+
+  async function checkAndPlayCriticalAlert(devices) {
+    const currentCritical = new Set();
+    devices.forEach(d => {
+      if (d.severity === 'CRITICAL') {
+        const key = `${d.pc_id}:${d.device_id}`;
+        currentCritical.add(key);
+      }
+    });
+
+    // Remove suppressed keys that are no longer critical
+    for (const key of Array.from(_suppressedCurrentCriticals)) {
+      if (!currentCritical.has(key)) {
+        _suppressedCurrentCriticals.delete(key);
+      }
+    }
+
+    let newCriticalFound = false;
+    for (const key of currentCritical) {
+      if (!_previousCriticalDevices.has(key) && !_suppressedCurrentCriticals.has(key)) {
+        newCriticalFound = true;
+        break;
+      }
+    }
+
+    // Update previous snapshot
+    _previousCriticalDevices = currentCritical;
+
+    if (newCriticalFound && !_alertStopRequested) {
+      await playAlertSound();
+    }
+  }
+
+  // Initialize stop button element now (hidden until needed)
+  ensureStopButton();
+
   window.addEventListener("DOMContentLoaded", () => {
     loadDashboard();
     setInterval(loadDashboard, 5000); 

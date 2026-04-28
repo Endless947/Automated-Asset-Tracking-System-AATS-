@@ -459,40 +459,41 @@ class Database:
             for row in rows:
                 lab_id = row["lab_id"]
                 pc_count = row["pc_count"]
-                                device_count = conn.execute(
-                                        """
-                                        SELECT COUNT(*)
-                                        FROM device_state_current d
-                                        WHERE d.lab_id = ?
-                                            AND NOT EXISTS (
-                                                SELECT 1 FROM excluded_pcs p
-                                                WHERE p.lab_id = d.lab_id AND p.pc_id = d.pc_id
-                                            )
-                                            AND NOT EXISTS (
-                                                SELECT 1 FROM excluded_devices e
-                                                WHERE e.lab_id = d.lab_id AND e.pc_id = d.pc_id AND e.device_id = d.device_id
-                                            )
-                                        """,
-                                        (lab_id, )
-                                ).fetchone()[0]
+                device_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM device_state_current d
+                    WHERE d.lab_id = ?
+                        AND NOT EXISTS (
+                            SELECT 1 FROM excluded_pcs p
+                            WHERE p.lab_id = d.lab_id AND p.pc_id = d.pc_id
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM excluded_devices e
+                            WHERE e.lab_id = d.lab_id AND e.pc_id = d.pc_id AND e.device_id = d.device_id
+                        )
+                    """,
+                    (lab_id,)
+                ).fetchone()[0]
+
                 status_counts = conn.execute(
                     """
-                    SELECT current_status, COUNT(*) as cnt 
-                                        FROM device_state_current d
-                                        WHERE d.lab_id = ?
-                                            AND NOT EXISTS (
-                                                SELECT 1 FROM excluded_pcs p
-                                                WHERE p.lab_id = d.lab_id AND p.pc_id = d.pc_id
-                                            )
-                                            AND NOT EXISTS (
-                                                SELECT 1 FROM excluded_devices e
-                                                WHERE e.lab_id = d.lab_id AND e.pc_id = d.pc_id AND e.device_id = d.device_id
-                                            )
+                    SELECT current_status, COUNT(*) as cnt
+                    FROM device_state_current d
+                    WHERE d.lab_id = ?
+                        AND NOT EXISTS (
+                            SELECT 1 FROM excluded_pcs p
+                            WHERE p.lab_id = d.lab_id AND p.pc_id = d.pc_id
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM excluded_devices e
+                            WHERE e.lab_id = d.lab_id AND e.pc_id = d.pc_id AND e.device_id = d.device_id
+                        )
                     GROUP BY current_status
-                    """, 
-                    (lab_id, )
+                    """,
+                    (lab_id,)
                 ).fetchall()
-                
+
                 lab_list.append({
                     "lab_id": lab_id,
                     "pc_count": pc_count,
