@@ -113,7 +113,7 @@ Double-click `dist/admin_setup.exe` (Windows will ask for Administrator permissi
 Note: Admin services are **manual-start only** (no reboot auto-start). The dashboard/server run only when the admin launches `admin_setup.exe`.
 
 It will automatically:
-- Open firewall ports for MQTT and the API
+- Open firewall ports for MQTT, the API, and the dashboard
 - Start Mosquitto broker
 - Start the FastAPI server
 - Serve the admin dashboard
@@ -133,7 +133,12 @@ Double-click `dist/agent_setup.exe`.
 2. Enter a unique PC ID for this machine (e.g. `PC01`, `PC02`)
 3. Pick which connected USB devices to monitor from a list
 
-It will then write `config.json` automatically, register itself to **auto-start on every Windows boot**, and launch the agent.
+It will then write `config.json` automatically and configure startup mode.
+
+- If run as Administrator, it installs a Windows service so the agent starts at boot.
+- If not run as Administrator, it falls back to registry startup after user login.
+
+In both cases it then launches the agent.
 
 Only Lab PC agent components are configured for reboot auto-start.
 
@@ -185,6 +190,7 @@ python windows_service.py start
 - Agent config: `student_agent/config.json`
 - NTP sync is recommended so CCTV and event times match.
 - Server env vars:
+  - `AATS_HOST`, `AATS_PORT`
   - `AATS_MQTT_BROKER`, `AATS_MQTT_PORT`
   - `AATS_DB_PATH`
   - `AATS_USB_TIMEOUT_SEC` (default `60`)
@@ -307,7 +313,7 @@ These commands print nicely formatted summaries that are easy to screenshot and 
     - PC heartbeat cards (online/offline by lab).
     - Current device state cards (severity colour + PENDING vs OPEN).
     - Recent events/alerts table with an audible alarm for new `CRITICAL` events.
-  - Access is restricted to a single admin username/password, which the page exchanges for a short-lived header token (`x-admin-token`) via `POST /auth/login`.
+  - Access is restricted to a single admin username/password, which the page exchanges for a shared header token (`x-admin-token`) derived from the configured admin password via `POST /auth/login`.
 
 ## End-to-end workflow tied to code
 
