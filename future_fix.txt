@@ -1,0 +1,586 @@
+═══════════════════════════════════════════════════════════════════════════════
+AATS (Automated Asset Tracking System) - PROJECT ISSUES & REMEDIATION PLAN
+═══════════════════════════════════════════════════════════════════════════════
+Generated: April 28, 2026
+Project: c:\Users\Siddharth\Desktop\sem 4\iot\project\AATS
+
+═══════════════════════════════════════════════════════════════════════════════
+EXECUTIVE SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+The AATS project is a functional lab asset tracking system but has 20 identified 
+issues across security, stability, and design categories:
+
+✗ CRITICAL (5)   - Must fix before production deployment
+✗ HIGH (4)       - Important for stability and correctness
+✗ MEDIUM (8)     - Should fix for robustness
+✓ LOW (3)        - Nice-to-have improvements
+
+Current Status: Code compiles and runs, but contains runtime risks and security 
+vulnerabilities that will cause crashes or expose the system to attacks.
+
+═══════════════════════════════════════════════════════════════════════════════
+🔴 CRITICAL ISSUES (5) - FIX IMMEDIATELY
+═══════════════════════════════════════════════════════════════════════════════
+
+ISSUE #1: HARDCODED DEFAULT CREDENTIALS (SECURITY CRITICAL)
+────────────────────────────────────────────────────────────
+Location: server/config.py, lines 25-26
+Severity: CRITICAL
+Risk: Default admin/admin credentials exposed in code. Anyone with repository 
+       access can access the admin dashboard and control lab assets.
+
+Current Code:
+    admin_username: str = env_or_default("AATS_ADMIN_USERNAME", "admin")
+    admin_password: str = env_or_default("AATS_ADMIN_PASSWORD", "admin")
+
+Impact: Production deployment will use admin/admin unless env vars explicitly set.
+        Creates audit trail exposure and theft risk.
+
+Remediation Plan:
+STEP 1: Require environment variables without defaults
+    - Modify server/config.py to NOT provide defaults for admin_username and password
+    - If AATS_ADMIN_USERNAME or AATS_ADMIN_PASSWORD not set, raise ValueError at startup
+    - This forces explicit configuration before running the server
+
+STEP 2: Update admin_setup.py to force credential configuration
+    - Prompt user for admin username and password during setup
+    - Write credentials to .env file (DO NOT commit to repository)
+    - Pass env vars to uvicorn startup
+
+STEP 3: Add .env.example template
+    - Create .env.example with placeholder values
+    - Document that .env should NEVER be committed to git
+    - Update .gitignore to exclude .env
+
+Estimated Effort: 1 hour
+Dependencies: None (Phase 1, can start immediately)
+
+Reference Issue in admin_setup.py:
+    # Lines 9-31 already document this as a FUTURE WORK item
+
+
+ISSUE #2: ASYNC IN THREAD DEADLOCK (STABILITY CRITICAL)
+─────────────────────────────────────────────────────────
+Location: student_agent/bluetooth_monitor.py, line 62
+Severity: CRITICAL
+Risk: Calling asyncio.run() inside a daemon thread will crash if:
+       - Thread is launched during agent startup
+       - Main event loop already exists in the process
+       - Result: "asyncio.run() cannot be called from a running event loop" exception
+
+Current Code:
+    def _monitor_loop(self) -> None:
+        if BleakScanner is None:
+            print("Bleak is not installed. Bluetooth monitor disabled.")
+            return
+        while self.running:
+            try:
+                seen = asyncio.run(self._scan_devices())  # ← CRASH HERE
+            except Exception as exc:
+                print(f"Bluetooth scan error: {exc}")
+                seen = {}
+
+Impact: Bluetooth device scanning will crash periodically, breaking asset monitoring
+        for Bluetooth-tracked devices. Silent failure in exception handler.
+
+Remediation Plan:
+STEP 1: Use asyncio.new_event_loop() for thread isolation
+    - Replace asyncio.run() with proper event loop creation
+    - Create loop in the thread context where it's needed
+    
+Fixed Code:
+    def _monitor_loop(self) -> None:
+        if BleakScanner is None:
+            print("Bleak is not installed. Bluetooth monitor disabled.")
+            return
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        while self.running:
+            try:
+                seen = loop.run_until_complete(self._scan_devices())
+            except Exception as exc:
+                print(f"Bluetooth scan error: {exc}")
+                seen = {}
+            finally:
+                time.sleep(self.poll_interval_sec)
+        
+        loop.close()
+
+STEP 2: Test with both USB and Bluetooth devices configured
+    - Verify Bluetooth scanner works without crashing
+    - Monitor for "asyncio already running" errors in logs
+
+Estimated Effort: 30 minutes
+Dependencies: None (Phase 1, can start immediately)
+
+
+ISSUE #3: NO RATE LIMITING ON LOGIN (DOS VULNERABILITY)
+─────────────────────────────────────────────────────────
+Location: server/app.py, POST /auth/login endpoint
+Severity: CRITICAL
+Risk: Attacker can brute-force admin password with no throttling. No delay between
+       login attempts, no account lockout, no IP-based rate limiting.
+
+Current Implementation:
+    - Simple username/password comparison
+    - No rate limiter on endpoint
+    - No logging of failed attempts
+
+Impact: Attacker can try 1000s of passwords per second without consequence.
+        Password security reduced to single-digit entropy.
+
+Remediation Plan:
+STEP 1: Install slowapi dependency
+    pip install slowapi
+    Add to server/requirements.txt
+
+STEP 2: Configure rate limiter in server/app.py
+    from slowapi import Limiter
+    from slowapi.util import get_remote_address
+    
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+
+STEP 3: Apply rate limiter to /auth/login
+    @app.post("/auth/login")
+    @limiter.limit("5/minute")  # 5 attempts per minute per IP
+    async def login(request: Request, credentials: LoginRequest) -> LoginResult:
+        # ... existing code ...
+
+STEP 4: Log failed attempts
+    - Add logger.warning() for failed login attempts
+    - Include timestamp, username, IP address
+    - Use for intrusion detection/alerts
+
+Estimated Effort: 45 minutes
+Dependencies: Phase 1 - None (can start immediately)
+
+
+ISSUE #4: NULL event_id WITH UNIQUE CONSTRAINT (DATA INTEGRITY)
+────────────────────────────────────────────────────────────────
+Location: server/database.py, line 25; student_agent device monitors
+Severity: CRITICAL
+Risk: event_id column is marked UNIQUE but can be NULL. Multiple NULL values 
+       will cause "UNIQUE constraint failed" silently (INSERT OR IGNORE behavior).
+       Events silently fail to insert, breaking audit trail.
+
+Current Schema (database.py line 25):
+    CREATE TABLE IF NOT EXISTS device_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT UNIQUE,  # ← Can be NULL, violates UNIQUE semantics
+        ...
+    )
+
+Current Code (device_monitor.py, bluetooth_monitor.py):
+    - Do NOT generate event_id
+    - Pass None (or omit) event_id field
+    - Server receives event_id=None
+    - Database insert fails silently due to INSERT OR IGNORE
+
+Impact: Event history is incomplete. Critical alerts may not be recorded.
+        Audit trail is unreliable for incident investigation.
+
+Remediation Plan:
+STEP 1: Generate UUID in student agent (preferred approach)
+    Add to both device_monitor.py and bluetooth_monitor.py:
+    
+    import uuid
+    
+    def _emit(self, payload: Dict) -> None:
+        if "event_id" not in payload:
+            payload["event_id"] = str(uuid.uuid4())
+        if self.on_change_callback:
+            self.on_change_callback(payload)
+
+STEP 2: Add NOT NULL + DEFAULT constraint to event_id
+    Modify server/database.py _init_db() method to ensure event_id is required
+
+STEP 3: Test event insertion
+    - Publish 100 events and verify all are recorded
+    - Check database for NULL event_id entries
+    - Verify no "UNIQUE constraint failed" errors in logs
+
+Estimated Effort: 1 hour
+Dependencies: Phase 1 - can start immediately
+
+
+ISSUE #5: HARDCODED LOCALHOST API (REMOTE ACCESS BROKEN)
+──────────────────────────────────────────────────────────
+Location: admin_dashboard/script.js, line 2
+Severity: CRITICAL
+Risk: Frontend hardcoded to http://127.0.0.1:8000, preventing remote admin 
+       access. Admin dashboard ONLY works on the same machine as the server.
+
+Current Code:
+    const API_BASE = "http://127.0.0.1:8000";
+
+Symptom: Accessing dashboard from remote machine fails with:
+    CORS error or "API not found"
+    Cannot reach /labs, /auth/login endpoints
+
+Impact: Admin must be physically at the server PC. Defeats purpose of centralized
+        monitoring. Lab admins cannot manage assets remotely.
+
+Remediation Plan:
+STEP 1: Make API_BASE dynamic based on current host
+    Replace hardcoded value with:
+    
+    // Detect server location from current page URL
+    const API_BASE = window.location.protocol + "//" + window.location.host;
+    
+    This uses the same host/port as the HTML page was loaded from.
+
+STEP 2: Test remote access
+    - Open dashboard from different machine on network
+    - Verify authentication and API calls work
+    - Test lab selection and device monitoring
+
+Estimated Effort: 30 minutes
+Dependencies: None (Phase 1, can start immediately)
+
+═══════════════════════════════════════════════════════════════════════════════
+🟠 HIGH PRIORITY ISSUES (4) - FIX SOON
+═══════════════════════════════════════════════════════════════════════════════
+
+ISSUE #6: GLOBAL STATE RACE CONDITION (THREADING)
+──────────────────────────────────────────────────
+Location: server/app.py, lines 140-145 (pending_watcher function)
+Severity: HIGH
+Risk: pending dict is modified without full lock coverage. Race condition 
+       between _pending_lock usage and dict modification.
+
+Current Problematic Code:
+    with _pending_lock:
+        for key, item in pending.items():
+            if item["confirmed"]:
+                continue
+            if now - item["started_at"] >= item["timeout_sec"]:
+                item["confirmed"] = True
+                to_confirm.append((key, item))
+    
+    # Lock RELEASED - another thread could modify pending[key] now
+    for _, item in to_confirm:
+        payload = item["payload"]  # ← Could be stale or deleted
+
+Impact: Double-promotion of alerts or missing alert promotion.
+        Unreliable pending window behavior.
+
+Remediation Plan:
+STEP 1: Reduce lock-free window
+    Do NOT release lock until to_confirm list is finalized
+    Keep lock held during entire confirmation process.
+
+Estimated Effort: 45 minutes
+Dependencies: Phase 2
+
+
+ISSUE #7: POWERSHELL COMMAND NOT QUOTED (INJECTION RISK)
+──────────────────────────────────────────────────────────
+Location: student_agent/device_monitor.py, lines 27-31
+Severity: HIGH
+Risk: VID/PID values from config.json are NOT validated before use.
+       If config contains malicious values, could be exploited.
+
+Remediation Plan:
+STEP 1: Validate VID/PID format in agent_setup.py
+    Add regex check for hexadecimal format only:
+    
+    import re
+    
+    def validate_vid_pid(value: str) -> bool:
+        return bool(re.match(r'^[0-9a-fA-F]{4}$', value))
+
+STEP 2: Add validation in device_monitor.py startup
+    Validate all tracked devices before starting monitor.
+
+Estimated Effort: 30 minutes
+Dependencies: Phase 2
+
+
+ISSUE #8: FIREWALL RULES TOO PERMISSIVE (NETWORK SECURITY)
+───────────────────────────────────────────────────────────
+Location: admin_setup.py (FUTURE WORK comment)
+Severity: HIGH
+Risk: netsh commands allow traffic from entire local subnet
+       Compromised machine on same LAN can spoof device events.
+
+Remediation Plan:
+STEP 1: Restrict to specific admin IP or subnet
+    Update admin_setup.py to ask for lab subnet during setup
+    Add remoteip parameter to netsh commands
+
+STEP 2: Document in README
+    Explain firewall configuration options
+
+Estimated Effort: 1 hour
+Dependencies: Phase 2
+
+
+═══════════════════════════════════════════════════════════════════════════════
+🟡 MEDIUM PRIORITY ISSUES (8) - SHOULD FIX FOR ROBUSTNESS
+═══════════════════════════════════════════════════════════════════════════════
+
+ISSUE #9: SILENT ERROR SWALLOWING (DEBUGGING DIFFICULTY)
+────────────────────────────────────────────────────────────
+Location: Multiple files - device_monitor.py, bluetooth_monitor.py, app.py
+Severity: MEDIUM
+Risk: Generic try/except blocks catch exceptions but only print to stdout.
+
+Examples:
+    except Exception as exc:
+        print(f"USB scan error: {exc}")
+        return []
+
+Remediation Plan:
+STEP 1: Add logging imports to all Python files
+    import logging
+    logger = logging.getLogger(__name__)
+
+STEP 2: Replace all try/except with logging
+    logger.error(f"USB device scan failed: {exc}", exc_info=True)
+
+Estimated Effort: 2 hours
+
+
+ISSUE #10: BLUETOOTH DISABLED SILENTLY (UX ISSUE)
+─────────────────────────────────────────────────
+Location: student_agent/bluetooth_monitor.py, line 5
+Severity: MEDIUM
+Risk: If 'bleak' not installed, Bluetooth monitor silently disabled.
+       User doesn't know Bluetooth devices not being tracked.
+
+Remediation Plan:
+STEP 1: Write warning to agent startup
+    Log clearly when Bluetooth monitoring disabled
+
+STEP 2: Add status indicator in heartbeat
+    Include "bluetooth_available" flag in MQTT status
+
+Estimated Effort: 1 hour
+
+
+ISSUE #11: PENDING RESTORE NO NULL CHECKS (DATA SAFETY)
+─────────────────────────────────────────────────────────
+Location: server/app.py, lines 127-134 (on_startup function)
+Severity: MEDIUM
+Risk: Pending window restoration doesn't validate payload.
+       Corrupted payload_json could crash server startup.
+
+Remediation Plan:
+STEP 1: Validate payload structure on restore
+    Skip corrupted items and clean up database
+
+STEP 2: Add defensive check in handle_event()
+    Verify payload exists before promotion
+
+Estimated Effort: 1.5 hours
+
+
+ISSUE #12: DATABASE PATH RELATIVE (PATH RESOLUTION)
+────────────────────────────────────────────────────
+Location: server/config.py, line 19
+Severity: MEDIUM
+Risk: Database path defaults to relative path "server/database/aats.db"
+       If CWD wrong at startup, database created in unexpected location.
+
+Remediation Plan:
+STEP 1: Use absolute path based on script location
+    Use __file__ to find script directory, not CWD
+
+STEP 2: Ensure parent directory exists
+    Already done in database.py ✓
+
+Estimated Effort: 30 minutes
+
+
+ISSUE #13: SETUP SCRIPT PATH RESOLUTION UNRELIABLE (PACKAGING)
+────────────────────────────────────────────────────────────────
+Location: admin_setup.py, agent_setup.py
+Severity: MEDIUM
+Risk: Uses sys.argv[0] which is unreliable with symlinks/PyInstaller.
+
+Remediation Plan:
+STEP 1: Use __file__ instead of sys.argv[0]
+    Add proper fallback for PyInstaller context
+
+Estimated Effort: 45 minutes
+
+
+ISSUE #14: CONFIG FILE PERMISSIONS NOT RESTRICTED (SECURITY)
+──────────────────────────────────────────────────────────────
+Location: student_agent/agent_setup.py
+Severity: MEDIUM
+Risk: config.json written without restricted permissions.
+       Other users can read MQTT broker IP and lab configuration.
+
+Remediation Plan:
+STEP 1: Set restrictive permissions after writing config
+    os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)  # Owner only
+
+Estimated Effort: 15 minutes
+
+
+ISSUE #15: STALE PC MARKING INCOMPLETE (LOGIC BUG)
+────────────────────────────────────────────────────
+Location: server/app.py (PC online/offline logic)
+Severity: MEDIUM
+Risk: PC online/offline status only updates if PC previously online.
+       If PC never sends heartbeat, it stays online forever.
+
+Remediation Plan:
+STEP 1: Handle NULL last_seen in SQL queries
+    Check both updated_at and last_seen timestamps
+
+Estimated Effort: 1 hour
+
+
+ISSUE #16: NO MQTT AUTHENTICATION (NETWORK TRUST)
+────────────────────────────────────────────────────
+Location: student_agent/mqtt_client.py, server/mqtt_listener.py
+Severity: MEDIUM
+Risk: MQTT connection has no username/password.
+       Network attacker can spoof events, hide thefts, create false alerts.
+
+Remediation Plan:
+STEP 1: Add MQTT username/password to config.json template
+STEP 2: Configure Mosquitto with authentication
+STEP 3: Update client to send credentials
+
+Estimated Effort: 1.5 hours
+
+
+ISSUE #17: EVENT details_json NOT VALIDATED (DATA INTEGRITY)
+──────────────────────────────────────────────────────────────
+Location: server/database.py, insert_event() method
+Severity: MEDIUM (LOW)
+Risk: details_json accepts any string. Malformed JSON causes parsing errors.
+
+Remediation Plan:
+STEP 1: Validate details argument is dict
+STEP 2: Add schema validation on read
+    Gracefully handle corrupted JSON
+
+Estimated Effort: 30 minutes
+
+
+═══════════════════════════════════════════════════════════════════════════════
+🟢 LOW PRIORITY ISSUES (3) - NICE-TO-HAVE IMPROVEMENTS
+═══════════════════════════════════════════════════════════════════════════════
+
+ISSUE #18: NO DATABASE CONNECTION POOLING (SCALABILITY)
+────────────────────────────────────────────────────────
+Severity: LOW
+Note: Acceptable for lab-scale system. Implement if scaling to 1000+ users.
+
+ISSUE #19: TIMEOUT VALUES NOT CONFIGURABLE (UX)
+─────────────────────────────────────────────────
+Severity: LOW
+Add timeout values to config.json for fine-tuning without code changes.
+
+ISSUE #20: MISSING STRUCTURED LOGGING THROUGHOUT
+──────────────────────────────────────────────────
+Severity: LOW
+Add consistent logging format and log levels across all components.
+
+═══════════════════════════════════════════════════════════════════════════════
+IMPLEMENTATION PHASES & TIMELINE
+═══════════════════════════════════════════════════════════════════════════════
+
+PHASE 1: CRITICAL FIXES (1-2 weeks)
+───────────────────────────────────
+Fixes issues: #1, #2, #3, #4, #5
+Estimated Effort: ~4-5 hours development + testing
+Blocking Condition: Required before production deployment
+
+PHASE 2: HIGH PRIORITY FIXES (2-3 weeks)
+──────────────────────────────────────────
+Fixes issues: #6, #7, #8
+Estimated Effort: ~3-4 hours development + testing
+Dependencies: Phase 1 complete
+
+PHASE 3: MEDIUM PRIORITY IMPROVEMENTS (3-4 weeks)
+──────────────────────────────────────────────────
+Fixes issues: #9-#17
+Estimated Effort: ~8-10 hours development + testing
+Dependencies: Phase 2 complete
+Benefit: Robustness, debuggability, security
+
+PHASE 4: POLISH & FUTURE WORK (4-6 weeks)
+──────────────────────────────────────────
+Fixes issues: #18-#20
+Estimated Effort: ~2-3 hours
+Dependencies: All previous phases
+
+═══════════════════════════════════════════════════════════════════════════════
+TESTING CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+UNIT TESTS
+──────────
+[ ] Import all Python modules without errors
+[ ] Device monitor scans and emits events
+[ ] Bluetooth monitor starts without crashing
+[ ] Database operations complete without errors
+[ ] API endpoints respond with correct status codes
+[ ] Event insertion creates record in database
+
+INTEGRATION TESTS
+──────────────────
+[ ] Start Mosquitto broker
+[ ] Start FastAPI server
+[ ] Start agent on lab PC
+[ ] Publish USB device MISSING event
+[ ] Verify event appears in database within 1s
+[ ] Verify dashboard shows WARNING then CRITICAL
+[ ] Test device removal from tracking
+[ ] Test PC removal from tracking
+
+SECURITY TESTS
+────────────────
+[ ] Verify default credentials don't work (Phase 1)
+[ ] Rate limiting blocks 10 login attempts in 1 minute (Phase 1)
+[ ] Dashboard accessible from remote machine (Phase 1)
+[ ] VID/PID validation rejects invalid formats (Phase 2)
+
+═══════════════════════════════════════════════════════════════════════════════
+DEPENDENCIES & PREREQUISITES
+═══════════════════════════════════════════════════════════════════════════════
+
+NEW PACKAGES TO ADD
+──────────────────
+server/requirements.txt:
+  + slowapi          (rate limiting)
+  + python-dotenv    (env file support - optional)
+
+student_agent/requirements.txt:
+  + pywin32          (Windows service support - ALREADY ADDED)
+
+═══════════════════════════════════════════════════════════════════════════════
+NOTES FOR IMPLEMENTATION
+═══════════════════════════════════════════════════════════════════════════════
+
+1. All 20 issues documented with specific file locations and line numbers
+2. Each issue includes remediation steps with code examples
+3. Phases grouped by severity and dependencies
+4. Recommended to do Phase 1 (Critical) before any production deployment
+5. Phase 2-3 can be done in parallel with Phase 1 to improve robustness
+6. Phase 4 is optional polish for future versions
+
+Key Strengths of Current System:
+✓ Thread-safe MQTT pub/sub with paho
+✓ Proper UTC timezone handling
+✓ Debounce logic prevents flapping alerts
+✓ Soft-delete audit trail maintained
+✓ Clean separation of concerns (agent, server, UI)
+
+Current Deployment Readiness:
+❌ NOT ready for production (security issues)
+⚠️  Can deploy to limited testing lab after Phase 1 fixes
+✓ Production-ready after Phase 2 complete
+
+═══════════════════════════════════════════════════════════════════════════════
+END OF FUTURE FIXES DOCUMENT
+═══════════════════════════════════════════════════════════════════════════════
