@@ -1,1225 +1,153 @@
 PROJECT OVERVIEW
 =================
-This project is called **AATS – Automated Asset Tracking System**.
-Think of it like a smart security guard for computer labs:
-- It **watches important devices** (USB mouse, keyboard, Bluetooth headset, etc.).
-- It **notices when something is unplugged or walks away**.
-- It **sends messages** to a central server.
-- The server **thinks for a bit** (debounce time).
-- If the problem is real (not just a quick bump), it **raises a loud red alert** on the admin dashboard and saves everything to a database.
-
-The project has three main parts:
-- `student_agent/` – a small program that runs on each lab PC and watches devices.
-- `server/` – a FastAPI backend that receives MQTT messages, stores data in SQLite, and applies alert logic.
-- `admin_dashboard/` – a web page that shows live status and history.
-
-Below we explain **every file** and, inside each file, **every line or group of lines**, in simple (kid-friendly) language but with enough detail for experienced programmers.
-
-
---------------------------------------------------------------------------------
-README.md
---------------------------------------------------------------------------------
-
-This file is the **user manual** and **report-ready overview** for the whole system.
-
-L1: `# Automated Asset Tracking System (AATS)`
-- Big title for the project.
-
-L3: `AATS is a hybrid IoT system for lab anti-theft monitoring.`
-- One‑sentence description: an Internet-of-Things project that helps stop theft in a lab.
-
-L5–L8: `## Demo scenarios` and intro
-- Heading for example demo flows to show to teachers or examiners.
-
-L9–L15: **USB theft attempt scenario**
-- Explains how to show the system catching a missing USB device.
-- Mentions starting Mosquitto (MQTT broker), FastAPI server, and the student agent.
-- Says the device appears as **CONNECTED (OK)** on the dashboard.
-- Then you unplug it → goes to **WARNING / PENDING** (yellow) while the server waits.
-- If it stays unplugged past the timeout, the state becomes **CRITICAL** (red), sound plays, and a database record is saved.
-- Plugging it back in resets state and the history table shows the full chain of events.
-
-L17–L22: **Bluetooth device moving out of range scenario**
-- Similar story but with Bluetooth and signal strength (RSSI).
-- As you walk away, status becomes **WEAK_SIGNAL (WARNING)**.
-- If it stays away for the longer Bluetooth timeout, a **CRITICAL** alert is created.
-- Coming back into range clears the alert.
-
-L24–L27: **PC abruptly powered off scenario**
-- Shows how the system handles a PC suddenly dying.
-- The MQTT “Last Will” message marks the PC as offline; the dashboard updates without the agent needing to shut down cleanly.
-
-L29–L47: `## Implemented in this repo`
-- Breaks the repo into three folders and describes each:
-  - `student_agent/` – monitors USB & Bluetooth, publishes MQTT `status` and `event` messages.
-  - `server/` – FastAPI backend that consumes MQTT, applies debounce logic and stores data in SQLite.
-  - `admin_dashboard/` – dashboard showing device state grid and event table with auto-refresh and audio alerts.
-
-L48–L52: `## MQTT topics`
-- Lists the exact MQTT topic patterns used so all code agrees:
-  - `status` topic for PC heartbeat.
-  - `event` topic for per-device events.
-
-L53–L60: `## API endpoints`
-- Lists the HTTP endpoints the front-end (and tools) can call:
-  - `/health`, `/labs/{lab_id}/devices`, `/labs/{lab_id}/pcs`, `/alerts`, `/events`, `POST /auth/login`.
-
-L62–L78: `## Setup` – steps 1–3
-- Step‑by‑step instructions to run broker, server, and agent.
-- Shows PowerShell commands for installing requirements and running Uvicorn and the agent.
-
-L82–L85:
-- Shows how to install and start the agent as a Windows service instead of running it in a console.
-
-L87–L88:
-- Final setup step: open the dashboard HTML file in a browser.
-
-L89–L99: `## Config notes`
-- Lists where configuration lives:
-  - `student_agent/config.json` for the agent.
-  - Environment variables for the server (broker address, DB path, timeouts, admin username/password).
-
-L100–L143: `## Database observability & debounce mapping`
-- Explains exactly how debounce timeouts from env vars map into code:
-  - USB missing timeout → `Settings.usb_missing_timeout_sec` in `server/config.py` and used in `timeout_for(...)`.
-  - Bluetooth timeout → `Settings.bluetooth_missing_timeout_sec`.
-- Describes the `pending` map and `pending_watcher()` thread in the server.
-- Explains each SQLite table:
-  - `device_events` for history (each important change).
-  - `device_state_current` for the latest state.
-  - `pc_heartbeat` for PC online/offline state.
-
-L144–L187: `### Quick DB queries for screenshots`
-- Shows raw `sqlite3` queries and the helper script `inspect_db.py` to print nice summaries.
-- Useful both for debugging and for report screenshots.
-
-L191–L217: `## System architecture (report-ready)`
-- High-level architecture description:
-  - Edge: student agent monitors devices and publishes data.
-  - Messaging: MQTT broker for transport.
-  - Backend: FastAPI server with MQTT listener and SQLite.
-  - Presentation: dashboard SPA.
-
-L218–L243: `## End-to-end workflow tied to code`
-- Walks through:
-  1. Normal operation (agents scanning and sending heartbeats).
-  2. Device unplugged → event sent → `handle_event` called.
-  3. Debounce and alert promotion.
-  4. PC powered off → MQTT LWT → `pc_heartbeat` updated.
-  5. Dashboard calling REST APIs and playing audio on new `CRITICAL` events.
-
-L244–L263: `## Configuration and deployment (report section)`
-- Lists prerequisites (Python, MQTT broker, drivers).
-- Shows how to configure env vars and deploy server, agent, and dashboard.
-
-L266–L268: **Time synchronization**
-- Tells you to keep clocks synced (server, PCs, CCTV) so timestamps match.
-
-L270–L288: `## Limitations and future scope`
-- Enumerates current limitations:
-  - Simple shared admin account, no TLS.
-  - In-memory debounce state.
-  - SQLite scalability.
-  - Limited device types monitored.
-- And what future improvements would look like.
-
-
---------------------------------------------------------------------------------
-admin_dashboard/index.html
---------------------------------------------------------------------------------
-
-L1: `<!doctype html>`
-- HTML5 document declaration.
-
-L2–L3: `<html lang="en">`
-- Root HTML element and language set to English.
-
-L4–L7: `<head>` section with metadata.
-- L4: Character set is UTF‑8 so all common characters work.
-- L5: Viewport meta makes it look good on mobile screens.
-- L6: Page title in the browser tab.
-- L7: Links to the CSS file `styles.css`.
-
-L9–L13: `<body>` header section.
-- L10–L13: `<header class="topbar">` with:
-  - `<h1>` – the main heading “AATS Admin Dashboard”.
-  - `<div id="healthBadge" class="badge">Loading...</div>` – placeholder badge that will show server health.
-
-L15–L25: Filter controls.
-- `section.filters` contains:
-  - L16: `labFilter` input defaulted to `LAB1` – which lab to view.
-  - L17: Optional PC filter.
-  - L18–L23: Severity dropdown (All, OK, WARNING, CRITICAL).
-  - L24: A button with id `refreshBtn` – clicking calls the JS `refresh()` function.
-
-L27–L30: PC Status section.
-- L28: Heading “PC Status (Heartbeat)”.
-- L29: `div#pcStatusGrid` where JS will inject PC cards.
-
-L32–L35: Current Device States section.
-- Similar: heading and `div#deviceGrid` for device cards.
-
-L37–L53: Recent Alerts / Events table.
-- L38: Section heading.
-- L39–L53: Table skeleton:
-  - `<thead>` defines column headers: Time, Lab, PC, Device, Type, Status, Severity, Alert.
-  - `<tbody id="eventsBody"></tbody>` – JS fills in rows here.
-
-L56: `<audio id="alertAudio" src="alert.mp3" preload="auto"></audio>`
-- Hidden audio element for playing an alert sound when new critical events arrive.
-
-L57: `<script src="script.js"></script>`
-- Loads the JavaScript logic.
-
-L58–L59: Closes `body` and `html`.
-
-
---------------------------------------------------------------------------------
-admin_dashboard/login.html
---------------------------------------------------------------------------------
-
-This is a simple login page that gets an admin token from the server and stores it in `localStorage`.
-
-L1: `<!doctype html>`
-- HTML5 declaration.
-
-L2–L6: `<html><head>...` and meta.
-- Very similar to the dashboard page, but the `<title>` is “AATS Login”.
-
-L7–L14: Inline `<style>` block.
-- L8: Styles `body` as a centered grid with light gray background.
-- L9: `.box` is the white card holding the login form, with padding, rounded corners, and shadow.
-- L10: `input, button` share width 100%, margin-top, padding.
-- L11: `button` has blue background, white text, rounded corners, and pointer cursor.
-- L12: `button:disabled` has reduced opacity.
-- L13: `#error` shows error messages in red with small font.
-
-L16–L23: `<body>` content.
-- L17: `div.box` container.
-- L18: Heading “Admin Login”.
-- L19: Username input with autocomplete hint.
-- L20: Password input of type password.
-- L21: Login button with id `loginBtn`.
-- L22: Empty `div#error` where error messages will be shown.
-
-L24–L74: `<script>` block – login logic.
-- L25: `API_BASE` is set to the server URL.
-- L27–37: `async function doLogin()`
-  - Reads username and password from inputs.
-  - If either is empty, shows a message and returns.
-- L39–45: Sends a POST request to `/auth/login` with JSON body `{ username, password }`.
-- L46–49: If response is not OK, show generic “Invalid credentials or server error.”
-- L50–53: Parse JSON, check for `data.token`. If missing, show an error.
-- L55–56: Save token to `localStorage` under key `aats_admin_token` and redirect to `index.html`.
-- L57–60: `catch` block: show network errors.
-- L60–61: `finally`: re-enable button.
-
-- L64–67: Adds a click listener on the login button to trigger `doLogin()` and prevent default form submission.
-- L69–73: Adds a `keydown` event so pressing Enter starts login.
-
-L75–L76: End of body and html.
-
-
---------------------------------------------------------------------------------
-admin_dashboard/script.js
---------------------------------------------------------------------------------
-
-Top‑level constants:
-
-L1: `const API_BASE = "http://localhost:8000";`
-- Base URL for server APIs.
-
-L2: `const seenCritical = new Set();`
-- A set keeping track of which `event_id`s have already triggered an audio alert, so you don’t beep repeatedly for the same event.
-
-L4: `let adminToken = localStorage.getItem("aats_admin_token");`
-- Reads any previously stored login token.
-
-L6–L9:
-- If there is no token, redirect the user to `login.html`.
-
-L11–L15:
-- Grab references to DOM elements:
-  - `healthBadge`, `pcStatusGrid`, `deviceGrid`, `eventsBody`, `alertAudio`.
-
-Helper to map severity to CSS classes:
-
-L17–L21: `function severityClass(severity) { ... }`
-- Returns `"critical"`, `"warning"`, or `"ok"` so CSS can color things red, yellow, or green.
-
-Helper to map PC status to CSS classes:
-
-L23–L29: `function pcStatusClass(pcStatus) { ... }`
-- Lower-case the status string and return `"pc-online"` or `"pc-offline"` or empty string.
-
-Fallback sound:
-
-L31–L44: `function toneFallback() { ... }`
-- If the `alert.mp3` audio fails to play (e.g., browser restriction), create a simple beep using Web Audio API:
-  - Creates an AudioContext, an oscillator, and a gain node.
-  - Sets a high tone (880 Hz).
-  - Plays quietly for 0.2 seconds.
-  - Wrapped in `try/except` to ignore errors.
-
-Main alert sound:
-
-L46–L49: `function playAlertSound() { ... }`
-- Resets audio element time to 0 and calls `play()`.
-- If play fails, falls back to `toneFallback()`.
-
-HTTP helper:
-
-L51–L74: `async function fetchJson(url) { ... }`
-- Makes authenticated GET requests:
-  - If `adminToken` isn’t set, reloads it from `localStorage` (handles page reloads).
-  - If still missing, redirects to `login.html` and throws.
-  - Uses `fetch()` with the `x-admin-token` header.
-  - If status is `401`, clear token and redirect to login.
-  - If response not OK, throw an error.
-  - Finally, returns parsed JSON.
-
-Rendering PC cards:
-
-L76–L95: `function renderPcStatus(pcs) { ... }`
-- Clears the `pcStatusGrid` content.
-- If no rows, show a “No heartbeat data yet” message.
-- For each PC:
-  - Create a `div`.
-  - Set `className` using `pcStatusClass()` (online/offline styling).
-  - Inner HTML shows PC ID, status, last seen, agent version, and updated timestamp.
-  - Append to the grid.
-
-Rendering devices:
-
-L97–L125: `function renderDevices(devices) { ... }`
-- Clears `deviceGrid`.
-- If empty, show message.
-- For each device:
-  - Calculate `isPending` based on `alert_status === "PENDING"`.
-  - `className` includes severity and `pending` if true.
-  - `alertLabel` is `"PENDING (debounce)"` or just `alert_status`.
-  - `pendingBadge` is a little chip that only appears for pending states.
-  - Inner HTML shows device label, PC, type, status, severity, alert, optional pending timestamp, and updated time.
-  - Append to grid.
-
-Rendering events:
-
-L127–L149: `function renderEvents(events) { ... }`
-- Clears `eventsBody`.
-- Takes up to first 100 events for display.
-- For each event:
-  - Create table row.
-  - Add severity-based class.
-  - Fill cells for time, lab, PC, device, type, raw status, severity, alert.
-  - Append row to table body.
-  - If severity is CRITICAL and `event_id` is new (not in `seenCritical`):
-    - Add `event_id` to `seenCritical`.
-    - Call `playAlertSound()` once.
-
-Main refresh function:
-
-L152–L177: `async function refresh() { ... }`
-- Reads `labId`, `pcId`, and `severity` from the filters.
-- If no labId, does nothing (safety).
-- In `try` block:
-  - Calls `/health`, updates `healthBadge` text to “Server: ok” and class to `"badge ok"`.
-  - Calls `/labs/{labId}/devices` and renders devices.
-  - Builds `URLSearchParams` for `/events` with lab, optional PC, optional severity, limit 200.
-  - Fetches events and renders them.
-- In `catch` block:
-  - If any error occurs, sets health badge to show the error and marks it as `badge critical`.
-
-Hooking up UI and auto-refresh:
-
-L179: Adds a click listener on `refreshBtn` that calls `refresh()`.
-
-L180: `setInterval(refresh, 5000);`
-- Every 5 seconds, refresh the data automatically.
-
-L181: `refresh();`
-- Immediately refresh on page load.
-
-
---------------------------------------------------------------------------------
-admin_dashboard/styles.css
---------------------------------------------------------------------------------
-
-L1–L9: `:root { ... }`
-- Defines CSS variables (custom properties) for colors and theme:
-  - Background color, card color, text color, OK/WARNING/CRITICAL colors, border color.
-
-L11–L17: `body { ... }`
-- Removes default margin.
-- Sets system UI font.
-- Sets a soft gradient background.
-- Sets text color and padding around the whole page.
-
-L19–L23: `.topbar { ... }`
-- Displays header as a row, with space between title and health badge, vertically centered.
-
-L25–L30: `.filters { ... }`
-- Adds margin top/bottom and lays out filter controls horizontally with wrapping and gaps.
-
-L32–L36: `input, select, button { ... }`
-- Same padding, border style, rounded corners for controls.
-
-L38–L43: `button { ... }`
-- Makes buttons blue with white text and pointer cursor.
-
-L45–L49: `.grid { ... }`
-- CSS grid for cards; automatically fits cards into available width.
-
-L51–L57: `.card { ... }`
-- Basic card appearance: white background, border, rounded corners, padding, shadow.
-
-L59–L61: `.card.ok`, `.card.warning`, `.card.critical`
-- Change border color based on severity.
-
-L63–L66: `.card.pending`
-- Dashed border and yellowish background for items in debounce state.
-
-L68–L71: `.card .meta`
-- Smaller, gray text for meta information lines.
-
-L73–L80: `.chip` base style
-- Small pill-shaped label: inline-block, padding, rounded, small font, bold.
-
-L82–L85: `.chip-pending`
-- Specific style for the debounce badge: pale yellow background and brown text.
-
-L87–L94: `.pc-card.pc-online` and `.pc-card.pc-offline`
-- Online PCs get green border.
-- Offline PCs get red border and pale red background.
-
-L96–L100: `.badge`
-- Pill-shaped badge used for health indicator (rounded, padding, light background).
-
-L102–L103: `.badge.ok` and `.badge.critical`
-- Color the health badge green or red depending on status.
-
-L105–L111: `table { ... }`
-- Makes the alert/events table full-width with collapsed borders, white background, rounded corners, and overflow hidden.
-
-L113–L118: `th, td { ... }`
-- Left-align, padding, bottom border, font size.
-
-L120–L121: `tr.warning td`, `tr.critical td`
-- Background colors for rows by severity.
-
-
---------------------------------------------------------------------------------
-server/app.py
---------------------------------------------------------------------------------
-
-Imports and helpers:
-
-L1–L4: `import threading`, `time`, `datetime`, `typing`
-- Brings in tools for background threads, current time, and type hints (`Dict`, `Tuple`).
-
-L6–L8: FastAPI and Pydantic imports.
-- `FastAPI`, `Depends`, `Header`, `HTTPException`, `Query`, `status` – for building APIs and handling headers and query parameters.
-- `CORSMiddleware` – allows cross-origin calls from the dashboard running in a browser.
-- `BaseModel` – used for request/response models.
-
-L10–L12: Local imports.
-- `settings` from `config.py` – environment-based settings.
-- `Database` from `database.py` – DB helper.
-- `MQTTListener` from `mqtt_listener.py` – subscribes to MQTT topics and calls callbacks.
-
-L15–L16: `def now_iso() -> str: ...`
-- Utility function to get current UTC timestamp in ISO 8601 format.
-
-App and database setup:
-
-L19: `db = Database(settings.db_path)`
-- Creates a single `Database` instance for the whole app, connecting to the configured SQLite file and ensuring tables exist.
-
-L20: `app = FastAPI(title="AATS Server", version="1.0.0")`
-- Creates FastAPI application with title and version for docs.
-
-L21–L27: `app.add_middleware(CORSMiddleware, ...)`
-- Allows requests from any origin (`"*"`), plus all methods and headers.
-- This keeps the demo simple: dashboard can be opened from `file://` or another host.
-
-Pending map for debounce:
-
-L29: `PendingKey = Tuple[str, str, str]`
-- Type alias for keys: `(lab_id, pc_id, device_id)`.
-
-L30: `pending: Dict[PendingKey, Dict] = {}`
-- In‑memory dict that tracks devices that might become critical after timeout.
-
-L31: `_pending_lock = threading.Lock()`
-- Lock to protect `pending` when multiple threads touch it.
-
-L32: `listener: MQTTListener | None = None`
-- Will hold the MQTT listener instance once started.
-
-Admin authentication helpers:
-
-L35–L38: `def get_admin_token() -> str: ...`
-- For this project, the **admin token is literally the configured admin password**.
-- Note in comments that real systems would use better auth.
-
-L41–L47: `def require_admin(...) -> None:`
-- Reads `x-admin-token` header.
-- If no `settings.admin_password` is set, it allows all requests (open system).
-- If token is missing or does not match, raise `401 Unauthorized`.
-- This function is used both as a dependency and called manually in endpoints.
-
-Login models:
-
-L50–L52: `class LoginRequest(BaseModel): username, password`
-- Pydantic model describing input body for `/auth/login`.
-
-L55–L56: `class LoginResult(BaseModel): token`
-- Response model for `/auth/login`.
-
-Severity helper:
-
-L59–L64: `def severity_for(status: str) -> str:`
-- Maps raw device `status` to a normalized severity:
-  - `CONNECTED` → `OK`.
-  - `WEAK_SIGNAL` → `WARNING`.
-  - Everything else (e.g. `MISSING`) currently maps to `WARNING`.
-  - (The code uses CRITICAL only when debounce promotes it.)
-
-Timeout helper:
-
-L67–L72: `def timeout_for(payload: Dict) -> int:`
-- Chooses debounce timeout seconds based on:
-  - If `device_type` is `"usb"` and `status` `"MISSING"` → use USB timeout.
-  - If `device_type` is `"bluetooth"` and status is `"MISSING"` or `"WEAK_SIGNAL"` → use Bluetooth timeout.
-  - Otherwise return 0 (no debounce, treat directly).
-
-Status handler:
-
-L75–L77: `def handle_status(payload: Dict) -> None:`
-- Writes PC heartbeat info into SQLite by calling `db.upsert_heartbeat`.
-
-Event handler (core logic):
-
-L79–L97: `def handle_event(payload: Dict) -> None:`
-- L80: Build key `(lab_id, pc_id, device_id)`.
-- L81: Read raw `status`.
-- L83–L97: If status is `"CONNECTED"`:
-  - L84–L86: Remove any pending entry and store it in `pending_event`.
-  - L87–L88: Upsert device state as `OK` and `CLOSED`, insert an `OK` event.
-  - L90–L96: If there was a pending event, insert a synthetic **glitch resolved** warning event, including details about when the pending window started.
-  - L97: Return; nothing else to do.
-
-L99–L103: Non-CONNECTED events.
-- L99: Compute `timeout_sec = timeout_for(payload)`.
-- L100–L103: If `timeout_sec <= 0` (no debounce needed):
-  - Upsert device state with severity based directly on status and `alert_status="OPEN"`.
-  - Insert an event with same severity and `OPEN`.
-  - Then return.
-
-L105–L117: Debounced path (timeout > 0).
-- L105–L113: Under `_pending_lock`:
-  - If the key is not in `pending`, add it with:
-    - `started_at` (current `time.time()`),
-    - `timeout_sec`,
-    - the original `payload`,
-    - `confirmed=False`.
-  - Whether new or existing, get `pending_state`.
-  - Compute `pending_since` as human‑readable ISO string from `started_at`.
-- L116: Upsert device state as:
-  - `severity="WARNING"`,
-  - `alert_status="PENDING"`,
-  - with `pending_since` timestamp.
-- No DB event is inserted yet; that only happens when timeout is confirmed.
-
-Pending watcher thread:
-
-L119–L137: `def pending_watcher() -> None:`
-- Infinite loop that:
-  - L121: Gets current `time.time()`.
-  - L122: Local list `to_confirm`.
-  - L124–L131: Under lock, iterate through pending items:
-    - Skip already confirmed items.
-    - If `now - started_at >= timeout_sec`, mark `confirmed=True` and add to `to_confirm`.
-  - L132–L135: For each item in `to_confirm` (outside lock):
-    - Extract `payload`.
-    - Upsert state as `severity="CRITICAL"`, `alert_status="OPEN"`, `pending_since=None`.
-    - Insert a `CRITICAL` event with `details={"debounce_seconds": timeout_sec}` so reports know how long it waited.
-  - L137: Sleep 1 second and repeat.
-
-Startup and shutdown hooks:
-
-L140–L150: `@app.on_event("startup") def on_startup() -> None:`
-- Create an `MQTTListener` with broker and port from settings.
-- Pass in `handle_status` and `handle_event` as callbacks.
-- Start the MQTT listener (it will run its own loop).
-- Start the `pending_watcher` thread as a daemon.
-
-L153–L157: `@app.on_event("shutdown") def on_shutdown() -> None:`
-- If MQTT listener exists, stop it cleanly (stops loop and disconnects).
-
-Simple health endpoint:
-
-L159–L161: `@app.get("/health")`
-- Returns `{"status": "ok", "time": <current ISO>}`.
-- Dashboard uses this to show health badge.
-
-Login endpoint:
-
-L164–L168: `@app.post("/auth/login", response_model=LoginResult)`
-- Takes `LoginRequest`.
-- Compares against `settings.admin_username` and `settings.admin_password`.
-- On mismatch → 401 invalid credentials.
-- On success → return `LoginResult(token=get_admin_token())`, which is just the admin password.
-
-Devices and PCs endpoints:
-
-L171–L173: `@app.get("/labs/{lab_id}/devices")`
-- `Depends(require_admin)` ensures header is checked.
-- Returns list of devices from `db.list_lab_devices(lab_id)`.
-
-L176–L178: `@app.get("/labs/{lab_id}/pcs")`
-- Similar, returns heartbeat records via `db.list_pc_heartbeat(lab_id)`.
-
-Alerts endpoint:
-
-L181–L194: `@app.get("/alerts")`
-- Accepts query parameters:
-  - `from`, `to` for time range.
-  - `severity` for filtering severity.
-  - `status` for `alert_status`.
-- L188: Calls `require_admin()` manually to enforce auth.
-- L189–L192: If `severity` is `None`:
-  - Fetch CRITICAL and WARNING events separately, both with limit 500.
-  - Concatenate lists and sort by `received_at` desc.
-- L194: If severity given, just returns events from `db.list_events` with that severity and limit 500.
-
-Events endpoint:
-
-L197–L218: `@app.get("/events")`
-- Accepts many filters: `lab_id`, `pc_id`, `device_id`, `severity`, `status`, `from`, `to`, `limit`.
-- L208: Calls `require_admin()` to enforce auth.
-- L209–L217: Calls `db.list_events(...)` with those filters.
-- L217: Clamps limit between 1 and 1000.
-
-
---------------------------------------------------------------------------------
-server/config.py
---------------------------------------------------------------------------------
-
-L1: `import os`
-- Needed to read environment variables.
-
-L2: `from dataclasses import dataclass`
-- Used to declare a simple settings data class.
-
-L5–L15: `@dataclass class Settings: ...`
-- Defines a configuration container with default values that can be overridden via env vars:
-  - `host`, `port`: where FastAPI server should listen.
-  - `mqtt_broker`, `mqtt_port`: MQTT connection details.
-  - `db_path`: path to SQLite DB file.
-  - `usb_missing_timeout_sec`: USB debounce time.
-  - `bluetooth_missing_timeout_sec`: Bluetooth debounce time.
-  - `admin_username`, `admin_password`: login credentials for dashboard.
-
-L18: `settings = Settings()`
-- Instantiates the settings object once, reading env vars at import time.
-
-
---------------------------------------------------------------------------------
-server/database.py
---------------------------------------------------------------------------------
-
-Utility and imports:
-
-L1–L5: Imports `json`, `sqlite3`, `datetime`, `Path`, and typing helpers.
-
-L8–L9: `def now_iso() -> str: ...`
-- Returns current UTC time in ISO format.
-
-Database class:
-
-L12–L17: `class Database: __init__`
-- Stores `db_path`.
-- Ensures parent directory exists (`mkdir`).
-- Calls `_init_db()` to create tables if needed.
-
-L18–L21: `_conn(self)`
-- Opens a SQLite connection to `self.db_path`.
-- Sets `row_factory` to `sqlite3.Row` so columns can be accessed by name.
-
-L23–L78: `_init_db(self)`
-- Runs three `CREATE TABLE IF NOT EXISTS` statements:
-  - `device_events` – historical log of events with many fields (ID, event_id, lab/pc/device IDs, labels, type, status, severity, alert_status, RSSI, timestamps, source, details JSON).
-  - `device_state_current` – one row per device with its latest status, severity, alert, RSSI, pending_since, updated_at; primary key across `(lab_id, pc_id, device_id)`.
-  - `pc_heartbeat` – one row per PC with PC status, last_seen, agent_version, updated_at; primary key `(lab_id, pc_id)`.
-
-Heartbeats:
-
-L79–L99: `upsert_heartbeat(self, payload)`
-- Uses `INSERT ... ON CONFLICT(lab_id, pc_id) DO UPDATE`.
-- Takes `lab_id`, `pc_id`, `pc_status`, `last_seen`, `agent_version` from payload.
-- `updated_at` uses `now_iso()`.
-- This means each new status message simply overwrites the old heartbeat for that PC.
-
-Device state:
-
-L101–L138: `upsert_device_state(self, payload, severity, alert_status, pending_since)`
-- Similar `INSERT ... ON CONFLICT(lab_id, pc_id, device_id) DO UPDATE`.
-- Writes:
-  - lab/pc/device IDs, label, type.
-  - `current_status` from payload’s `status`.
-  - normalized `severity` and `alert_status` from arguments.
-  - optional `rssi` and `pending_since`.
-  - `updated_at` with `now_iso()`.
-
-Event insertion:
-
-L140–L167: `insert_event(self, payload, severity, alert_status, details=None)`
-- Inserts a row into `device_events`.
-- Uses `INSERT OR IGNORE` so repeated events with same unique `event_id` are not duplicated.
-- Saves all key fields and `details_json` as JSON‑encoded string of the `details` dict (or `{}` if None).
-
-List lab devices:
-
-L169–L179: `list_lab_devices(self, lab_id)`
-- Runs a SELECT from `device_state_current` filtered by `lab_id`, sorted by PC, type, and device ID.
-- Returns a list of dicts.
-
-Listing events with filters:
-
-L181–L227: `list_events(...)`
-- Builds a dynamic WHERE clause (`clauses` list) starting from `"1=1"` so it is always valid.
-- Adds clauses for `lab_id`, `pc_id`, `device_id`, `severity`, `alert_status`, `from_time`, `to_time` if provided.
-- Adds `LIMIT ?`.
-- Executes query and returns rows as dicts.
-
-Listing PC heartbeat:
-
-L229–L240: `list_pc_heartbeat(self, lab_id)`
-- SELECTs all heartbeat rows filtered by `lab_id`, ordered by `pc_id`.
-
-
---------------------------------------------------------------------------------
-server/models.py
---------------------------------------------------------------------------------
-
-L1–L3: Imports typing `Optional` and `BaseModel` from `pydantic`.
-
-L6–L8: `class HealthResponse(BaseModel): status: str`
-- Pydantic model that could be used to type `/health` responses.
-
-L10–L21: `class DeviceState(BaseModel): ...`
-- Defines a structured model for current device state shape:
-  - Lab ID, PC ID, device ID and optional label.
-  - device_type, current_status, severity, alert_status.
-  - optional RSSI, pending_since.
-  - updated_at.
-- Note: currently the API returns plain dicts, but this model documents the contract.
-
-L24–L38: `class EventRecord(BaseModel): ...`
-- Pydantic model for event records:
-  - event_id, lab/pc/device IDs, optional label.
-  - device_type, status, severity, alert_status.
-  - optional RSSI and timestamps.
-  - optional source string.
-- Again mostly for documentation/validation.
-
-
---------------------------------------------------------------------------------
-server/mqtt_listener.py
---------------------------------------------------------------------------------
-
-L1–L5: Imports `json`, typing `Callable`, and `paho.mqtt.client`.
-
-L7–L19: `class MQTTListener: __init__`
-- Stores broker, port, and references to `on_status` and `on_event` callbacks.
-- Creates a `paho.mqtt.client.Client` with API version 1.
-- Registers its own `_on_connect` and `_on_message` handlers.
-
-L24–L30: `_on_connect(self, client, userdata, flags, rc)`
-- When connected successfully (`rc == 0`), prints message and subscribes to the two topic patterns:
-  - `aats/lab/+/pc/+/status`
-  - `aats/lab/+/pc/+/event`
-- If connection fails, prints error code.
-
-L32–L41: `_on_message(self, client, userdata, msg)`
-- Attempts to parse message payload as JSON.
-- If JSON fails, quietly returns (ignores bad messages).
-- If topic ends with `/status`, calls `self.on_status(payload)`.
-- If topic ends with `/event`, calls `self.on_event(payload)`.
-
-L43–L49: `start` and `stop`
-- `start`:
-  - Connects to broker and starts background network loop (`loop_start`).
-- `stop`:
-  - Stops background loop and disconnects from broker.
-
-
---------------------------------------------------------------------------------
-server/inspect_db.py
---------------------------------------------------------------------------------
-
-L1–L4: Imports argparse, sqlite3, and Path.
-
-L5: `from config import settings`
-- Reads DB path from same config as the server to inspect the same SQLite file.
-
-DB connection helper:
-
-L8–L14: `def connect():`
-- Reads `settings.db_path` as Path.
-- If DB file does not exist, exits with message.
-- Opens SQLite connection, sets row_factory to `sqlite3.Row`, returns connection.
-
-Printing helpers:
-
-L17–L21: `def print_header(title: str) -> None:`
-- Prints nice header with underlines for section titles.
-
-Showing recent events:
-
-L23–L57: `def show_recent_events(lab_id, pc_id, limit)`
-- Uses `connect()`.
-- Builds `clauses` and `params` similar to `Database.list_events`.
-- Filters on lab and PC if supplied.
-- Selects key columns from `device_events`, orders by `received_at DESC`, limits by `limit`.
-- Prints header and loops through rows, printing them in friendly format.
-
-Showing device state:
-
-L59–L83: `def show_device_state(lab_id)`
-- Connects to DB.
-- Selects fields from `device_state_current` filtered by `lab_id`.
-- Prints each row, including pending_since if present and updated_at.
-
-Showing PC heartbeat:
-
-L86–L107: `def show_pc_heartbeat(lab_id)`
-- Similar pattern but for `pc_heartbeat` table.
-- Prints PC ID, status, last_seen, agent_version, updated_at.
-
-Main function:
-
-L110–L140: `def main() -> None:`
-- Uses `argparse` to define three modes:
-  - `events` – default.
-  - `state`.
-  - `heartbeat`.
-- Optional `--lab` and `--pc`, `--limit`.
-- If mode is `state` or `heartbeat` but `--lab` is missing, exit with error.
-- Calls appropriate show_* function based on mode.
-
-L142–L143: Standard Python main guard to call `main()` when run as a script.
-
-
---------------------------------------------------------------------------------
-server/requirements.txt
---------------------------------------------------------------------------------
-
-L1: `fastapi`
-- Web framework for Python, used to build APIs.
-
-L2: `uvicorn`
-- ASGI server that runs the FastAPI app.
-
-L3: `paho-mqtt`
-- MQTT client library used by the server’s `MQTTListener`.
-
-
---------------------------------------------------------------------------------
-student_agent/main.py
---------------------------------------------------------------------------------
-
-L1: `from service_runner import run_foreground`
-- Imports helper function to run the agent in foreground mode.
-
-L4–L5:
-- Standard script pattern: if file is run directly, call `run_foreground()` to start agent.
-
-
---------------------------------------------------------------------------------
-student_agent/mqtt_client.py
---------------------------------------------------------------------------------
-
-Imports:
-
-L1–L4: `import json`, typing `Any, Dict`, and `paho.mqtt.client as mqtt`.
-
-Class:
-
-L7–L13: `class MQTTClient: __init__(...)`
-- Stores connection details: broker, port, lab_id, pc_id, agent_version.
-
-L15–L16:
-- Builds topic strings:
-  - `aats/lab/{lab_id}/pc/{pc_id}/status`
-  - `aats/lab/{lab_id}/pc/{pc_id}/event`
-
-L18–L21:
-- Creates MQTT client with API version 1.
-- Hooks `on_connect` and `on_disconnect` methods.
-
-L22–L29: Last Will and Testament:
-- `will_payload` describes PC as offline with agent version.
-- `will_set` sets status topic retained message to this JSON, so if agent dies suddenly, broker sends this to server.
-
-Callbacks:
-
-L31–L35: `on_connect`
-- Logs success or error code.
-
-L37–L39: `on_disconnect`
-- Logs when disconnected.
-
-Connect/disconnect:
-
-L40–L43: `connect`
-- Connects to broker and starts network loop in a background thread.
-
-L44–L47: `disconnect`
-- Stops loop and disconnects.
-
-Publish:
-
-L48–L52: `publish_event`
-- Publishes JSON to `topic_event` with QoS 1, non-retained.
-
-L51–L52: `publish_status`
-- Publishes JSON to `topic_status` with QoS 1, retained.
-
-
---------------------------------------------------------------------------------
-student_agent/device_monitor.py
---------------------------------------------------------------------------------
-
-Imports:
-
-L1–L5: `subprocess`, `threading`, `time`, `datetime`, typing helpers.
-
-Class:
-
-L8–L20: `class USBDeviceMonitor: __init__(...)`
-- Takes:
-  - `tracked_devices`: list of dicts describing USB devices (VID/PID).
-  - `poll_interval_sec`: how often to scan Windows for USB devices.
-  - `on_change_callback`: function called whenever device status changes.
-- Initializes internal state `_state` dict mapping device_id to current status.
-
-L21–L23: `_now`
-- Returns current time in UTC ISO format.
-
-L24–L35: `_get_present_instance_ids`
-- Runs a PowerShell command:
-  - `Get-PnpDevice -PresentOnly | Select-Object -ExpandProperty InstanceId`.
-- This returns device instance IDs for all currently present devices.
-- Lowercases and strips each line, returns a list of IDs.
-- On error, prints message and returns empty list.
-
-L37–L39: `_is_connected`
-- Builds a marker substring `vid_xxxx&pid_yyyy` in lower case.
-- Returns True if any instance ID contains this marker.
-
-L41–L44: `_emit`
-- If callback is set, call it with given payload.
-
-L45–L51: `start`
-- Guard against double start.
-- Sets running flag.
-- Creates background thread running `_monitor_loop` as daemon.
-
-L52–L54: `stop`
-- Sets running flag to False (loop will exit soon).
-
-Monitor loop:
-
-L55–L83: `_monitor_loop`
-- While `self.running`:
-  - L57: Get list of present instance IDs.
-  - L59–L63: Loop through each tracked device config:
-    - `device_id`, `vid`, `pid`, and alias (fallback to device_id).
-  - L65–L68: Determine `connected` based on instance IDs and compute `new_status` as `"CONNECTED"` or `"MISSING"`.
-  - Compare to `old_status` in internal `_state`.
-  - If changed:
-    - Update `_state`.
-    - Call `_emit` with payload containing:
-      - `device_id`, `device_label`, `device_type="usb"`, `status`, `rssi=None`, `observed_at`, `source="usb_monitor"`.
-  - L83: Sleep `poll_interval_sec` seconds.
-
-
---------------------------------------------------------------------------------
-student_agent/bluetooth_monitor.py
---------------------------------------------------------------------------------
-
-Imports:
-
-L1–L6: `asyncio`, `threading`, `time`, `datetime`, typing helpers.
-
-L7–L10:
-- Tries to import `BleakScanner` from `bleak`.
-- If import fails, sets `BleakScanner = None` so code can handle missing library.
-
-Class:
-
-L13–L25: `class BluetoothMonitor: __init__(...)`
-- Takes list of `tracked_devices`, poll interval, optional callback.
-- Sets `running` flag and internal `_state` map of device_id → status.
-
-L26–L27: `_now`
-- Returns current UTC ISO string.
-
-L29–L42: `_scan_devices`
-- Async function to scan Bluetooth devices using `BleakScanner.discover`.
-- Returns dict mapping MAC address (uppercase) to integer RSSI.
-- Skips missing or None RSSI values.
-- If `BleakScanner` is None, returns empty dict.
-
-L44–L47: `_emit`
-- If callback provided, calls it with payload.
-
-L48–L53: `_resolve_status`
-- Chooses status based on RSSI and weak threshold:
-  - `None` → `"MISSING"`.
-  - RSI less than weak threshold → `"WEAK_SIGNAL"`.
-  - Else `"CONNECTED"`.
-
-L55–L60: `start`
-- Similar to USB monitor: sets running flag and starts `_monitor_loop` in background thread.
-
-L62–L63: `stop`
-- Sets running flag false.
-
-Monitor loop:
-
-L65–L69: Early return if `BleakScanner` is None.
-- Prints message that Bluetooth monitor is disabled.
-
-L70–L101: `_monitor_loop`
-- While running:
-  - Tries to run async `_scan_devices()` using `asyncio.run`.
-  - If an error occurs, prints error and uses empty result.
-  - For each configured device:
-    - Read `device_id`, MAC (uppercased), alias, weak_threshold (default −75).
-    - Lookup RSSI from `seen` dict.
-    - Determine new status via `_resolve_status`.
-    - Compare to `_state`; if changed:
-      - Update `_state`.
-      - Call `_emit` with payload including device details, RSSI, observed_at, and `source="bluetooth_monitor"`.
-  - Sleep `poll_interval_sec`.
-
-
---------------------------------------------------------------------------------
-student_agent/service_runner.py
---------------------------------------------------------------------------------
-
-Imports:
-
-L1–L6: `atexit`, `json`, `os`, `threading`, `time`, typing helpers.
-
-L8–L10:
-- Import Bluetooth, USB, and MQTT client classes.
-
-Class AgentRuntime:
-
-L13–L25: `class AgentRuntime: __init__(...)`
-- Determines base directory of the script.
-- Sets default config path to `config.json` in same folder.
-- Initializes:
-  - `_mqtt_client`, `_usb_monitor`, `_bt_monitor`, `_heartbeat_thread` to None.
-  - `_running` flag False.
-  - `_lab_pc` tuple.
-  - `_agent_version` string.
-  - `_heartbeat_interval_sec`.
-
-L26–L28: `_load_config`
-- Opens config JSON file and returns parsed dict.
-
-L30–L41: `start`
-- Prevent double start.
-- Load config.
-- Extract `lab_id`, `pc_id`, store in `_lab_pc`.
-- Set `_agent_version` and scanning/heartbeat intervals.
-- Create MQTTClient with broker, port, lab/pc, and agent version.
-- Connect MQTT client.
-
-Device callback:
-
-L51–L67: `device_callback(event: Dict) -> None`
-- Called whenever a USB/Bluetooth event occurs.
-- If no lab/pc or MQTT client, return early (safety).
-- Builds payload with:
-  - event_id (if any),
-  - lab_id, pc_id,
-  - device_id, label, type, status, rssi,
-  - observed_at, agent_time, source (default `"agent"` if not set).
-- Publishes event to MQTT broker using `publish_event`.
-
-Monitor construction:
-
-L69–L78:
-- Create `USBDeviceMonitor` with `usb_devices` from config and `scan_interval_sec`, hooking `device_callback`.
-- Create `BluetoothMonitor` with `bluetooth_devices`, using at least 5s poll interval, same callback.
-
-Starting everything:
-
-L80: Set `_running = True`.
-
-Heartbeat loop:
-
-L82–L95: `heartbeat_loop`
-- Local function that sends heartbeat messages periodically:
-  - Builds payload with `lab`, `pc`, `pc_status="online"`, `last_seen=None`, `agent_version`.
-  - Calls `publish_status` via MQTT.
-  - Sleeps `self._heartbeat_interval_sec`.
-
-L97–L100:
-- Start both monitors.
-- Start heartbeat thread as daemon.
-
-Stopping:
-
-L102–L123: `def stop(self) -> None:`
-- Mark `_running` False.
-- Stop both monitors if they exist.
-- If `_mqtt_client` and `_lab_pc` exist:
-  - Try to publish final status with `pc_status="offline"`.
-  - Then disconnect MQTT client.
-
-Global runtime and run_foreground:
-
-L125–L131: `_runtime` global and `run_foreground(config_path=None)`
-- Creates `AgentRuntime` once and stores globally.
-
-L132–L138: `_on_exit` registered with `atexit`
-- When Python process ends, try to stop runtime cleanly.
-
-L140–L147: Start runtime and sleep forever until KeyboardInterrupt.
-- On Ctrl+C, stop runtime.
-
-L149–L151: `if __name__ == "__main__":` block calling `run_foreground`.
-
-
---------------------------------------------------------------------------------
-student_agent/windows_service.py
---------------------------------------------------------------------------------
-
-Imports:
-
-L1–L5: Imports `servicemanager`, Windows service modules, and `AgentRuntime`.
-
-Class:
-
-L9–L12: `class AATSAgentService(win32serviceutil.ServiceFramework):`
-- Defines a Windows Service named `"AATSAgentService"`.
-- Human-readable display name and description explain its purpose.
-
-L14–L18: `__init__`
-- Calls base class initializer.
-- Creates an event `hWaitStop` to wait for stop signal.
-- Creates `AgentRuntime` instance.
-
-L19–L24: `SvcDoRun`
-- Logs starting message.
-- Starts agent runtime.
-- Waits until `hWaitStop` is signaled (i.e., service stop requested).
-- Stops agent runtime and logs it stopped.
-
-L26–L28: `SvcStop`
-- Reports service as stop pending.
-- Sets `hWaitStop` event, which ends `SvcDoRun` wait.
-
-L31–L32: Standard `if __name__ == "__main__"` to handle service commands (install, start, stop) via command line.
-
-
---------------------------------------------------------------------------------
-student_agent/config.json
---------------------------------------------------------------------------------
-
-This JSON configuration tells the agent:
-- which lab and PC it is,
-- where the MQTT broker is,
-- which devices to watch.
-
-L1: `{` – start of JSON object.
-
-L2–L3: `"lab_id": "LAB1"`, `"pc_id": "PC12"`
-- Identifiers for the lab and PC; appear in MQTT payloads and database.
-
-L4–L5: `"broker": "localhost"`, `"port": 1883`
-- MQTT broker host and port.
-
-L6–L8: `"scan_interval_sec": 2`, `"heartbeat_interval_sec": 30`, `"agent_version": "1.0.0"`
-- How often to scan devices.
-- How often to send PC heartbeat.
-- Version string for agent.
-
-L9–L21: `"usb_devices": [ ... ]`
-- Array of tracked USB devices:
-  - Each object has:
-    - `device_id`: internal identifier string.
-    - `vid`, `pid`: vendor and product IDs that identify USB device.
-    - `alias`: friendly display name for dashboard.
-
-L23–L30: `"bluetooth_devices": [ ... ]`
-- Array of tracked Bluetooth devices:
-  - Each object has:
-    - `device_id`: internal ID.
-    - `mac`: MAC address of Bluetooth device.
-    - `alias`: friendly name.
-    - `weak_rssi_threshold`: threshold where RSSI below means WEAK_SIGNAL.
-
-L31: `}` – end of JSON object.
-
-
---------------------------------------------------------------------------------
-student_agent/requirements.txt
---------------------------------------------------------------------------------
-
-L1: `paho-mqtt`
-- MQTT client library for the agent.
-
-L2: `wmi`
-- Windows Management Instrumentation helper (not directly used in current file set, but common for Windows hardware queries).
-
-L3: `pywin32`
-- Python access to Windows APIs, needed for running as a Windows service.
-
-L4: `bleak`
-- Bluetooth Low Energy scanning library used by `BluetoothMonitor`.
-
-
---------------------------------------------------------------------------------
-student_agent/test.py
---------------------------------------------------------------------------------
-
-This is a small helper/test script.
-
-L1–L2: Imports `datetime` and `timezone`.
-
-L4–L9: `def classify_bluetooth_status(rssi, weak_threshold):`
-- Very similar to logic in `BluetoothMonitor`:
-  - If `rssi` is None → `"MISSING"`.
-  - If `rssi` is less than `weak_threshold` → `"WEAK_SIGNAL"`.
-  - Otherwise → `"CONNECTED"`.
-
-L12–L13: `def now_iso():`
-- Returns current UTC time in ISO format.
-
-L16–L18: Main block.
-- Prints test result of `classify_bluetooth_status(-82, -75)` (should be `"WEAK_SIGNAL"`).
-- Prints current time via `now_iso()`.
-
-
-================================================================================
-HOW TO USE THIS DESCRIPTION
-================================================================================
-
-- **Beginners / kids** can read the descriptions above like a story:
-  - “The agent is like a little helper on each PC.”
-  - “The server is like a teacher keeping a notebook of all events.”
-  - “The dashboard is like a big colorful scoreboard.”
-- **Experienced developers** can:
-  - Map each behavior (debounce, heartbeat, events) to its function and file.
-  - Quickly find where to modify timeouts (`config.py`, environment vars).
-  - Extend the system by adding new devices in `config.json`, new API endpoints in `server/app.py`, or richer UI in `admin_dashboard/`.
-
-This `description.txt` covers every file and walks through each line or logical group of lines so you can understand and explain the project clearly in a viva, report, or presentation.
-
+AATS (Automated Asset Tracking System) is a lab anti-theft monitoring system built around three cooperating layers:
+- a student agent that runs on each lab PC and watches USB and Bluetooth assets,
+- a FastAPI server that receives MQTT data, applies debounce logic, stores history in SQLite, and exposes admin APIs,
+- and a browser-based admin dashboard that shows live status, alerts, and event history.
+
+The project is designed for a real demo flow:
+1. a lab PC runs the agent,
+2. the agent publishes heartbeats and device state changes to MQTT,
+3. the server turns temporary disconnects into WARNING/PENDING states first,
+4. and if the problem persists, the state becomes CRITICAL on the dashboard and a database record is stored.
+
+CODE STRUCTURE
+==============
+The code is split into setup scripts, runtime code, and presentation code.
+
+student_agent/
+- main.py is only the launcher.
+- service_runner.py contains the actual agent runtime.
+- mqtt_client.py publishes retained PC status and non-retained device events.
+- device_monitor.py watches configured USB devices.
+- bluetooth_monitor.py watches configured Bluetooth devices.
+- windows_service.py exposes the agent as a Windows service called AATSAgentService.
+
+server/
+- app.py defines the FastAPI app, the authentication route, the public read APIs, the delete/removal APIs, and the debounce workflow.
+- config.py reads environment variables such as the MQTT broker, database path, admin credentials, and timeout values.
+- database.py creates the SQLite tables and implements all insert/update/query methods.
+- mqtt_listener.py connects to MQTT, subscribes to the status and event topics, and passes decoded JSON into app.py.
+- inspect_db.py is a helper for printing event history, current device state, and PC heartbeat summaries for screenshots and debugging.
+- models.py defines the Pydantic response models used by the API.
+
+admin_dashboard/
+- login.html is the login screen.
+- index.html is the lab picker.
+- dashboard.html is the per-lab monitoring page.
+- script.js fetches data from the server, renders the UI, stores the admin token, refreshes the page, and plays the critical alert sound.
+- styles.css defines the dashboard layout, colors, cards, badges, tables, and responsive presentation.
+
+SETUP SCRIPTS
+=============
+admin_setup.py prepares the admin machine.
+It can:
+- find an installed Mosquitto broker,
+- fall back to a bundled broker binary when present,
+- optionally install Mosquitto through winget or a verified download path,
+- open firewall ports for MQTT, the API, and the dashboard,
+- start the broker and the FastAPI server,
+- serve the dashboard,
+- open the browser automatically,
+- and broadcast the admin PC IP so lab agents can discover it during first run.
+
+agent_setup.py prepares each lab PC.
+It can:
+- listen for the admin broadcast for up to 30 seconds,
+- fall back to manual IP entry if discovery fails,
+- prompt for a unique PC ID,
+- scan connected USB devices so the user can choose what to track,
+- write student_agent/config.json,
+- and register the agent as either a Windows service or a registry startup entry.
+
+RUNTIME BEHAVIOR
+================
+The runtime flow is straightforward but important:
+- student_agent/service_runner.py loads the JSON config and starts the MQTT client.
+- It launches the USB monitor and Bluetooth monitor in background threads.
+- It publishes a periodic online heartbeat every configured interval.
+- When a tracked device changes state, the callback packages the event with lab_id, pc_id, device_id, device_type, status, timestamps, and optional RSSI.
+- The event is published to MQTT.
+- The server's MQTT listener receives the message and calls the proper handler.
+- The server decides whether the state is immediately safe, should wait in PENDING, or should become CRITICAL after a timeout.
+- The dashboard refreshes from the API and renders the latest state.
+
+DETAILED CODE BEHAVIOR
+======================
+Agent side:
+- USB monitoring is based on Windows Get-PnpDevice output and compares InstanceId values against configured VID/PID pairs.
+- Bluetooth monitoring uses bleak to scan nearby devices and compares RSSI values against a configured weak-signal threshold.
+- MQTT status messages are retained so the latest PC heartbeat is always available.
+- MQTT event messages are not retained because they represent history rather than state.
+- The agent publishes an offline status on shutdown, while the MQTT Last Will also handles unexpected loss of connection.
+- When run as a service, the runtime is stopped through the Windows service wrapper.
+
+Server side:
+- `POST /auth/login` checks the configured admin username and password and returns a token derived from the admin password.
+- `GET /health` returns a simple status/time response for liveness.
+- `GET /labs` lists labs and summary counts.
+- `GET /labs/{lab_id}/pcs` returns heartbeat data and also marks stale PCs as offline using the configured heartbeat timeout.
+- `GET /labs/{lab_id}/devices` returns the current live device state.
+- `GET /alerts` and `GET /events` return historical records with filters.
+- `DELETE /labs/{lab_id}/pcs/{pc_id}` removes a PC from tracking.
+- `DELETE /labs/{lab_id}/pcs/{pc_id}/devices/{device_id}` removes one device from tracking.
+- The server keeps an in-memory pending map for debounce scheduling and also stores pending windows in SQLite so they survive restart.
+- When a pending window expires, the device is promoted to CRITICAL and a details_json payload records the debounce duration.
+
+Database layer:
+- device_events stores the forensic timeline.
+- device_state_current stores the latest dashboard snapshot.
+- pc_heartbeat stores online/offline state and agent version.
+- pending_window stores active debounce windows.
+- excluded_pcs and excluded_devices track items that the user removed from monitoring.
+
+Dashboard behavior:
+- login.html authenticates the user and stores a token in localStorage.
+- index.html queries the server for labs and shows them as selectable cards.
+- dashboard.html loads one lab's PCs and devices.
+- script.js attaches the x-admin-token header to requests, renders the card UI, refreshes periodically, and plays a sound the first time a new critical event appears.
+- styles.css uses a clean card-based interface with severity colors and responsive layout.
+
+DATA AND API SHAPE
+==================
+Important MQTT topics:
+- aats/lab/{lab_id}/pc/{pc_id}/status
+- aats/lab/{lab_id}/pc/{pc_id}/event
+
+Important HTTP routes:
+- /health
+- /auth/login
+- /labs
+- /labs/{lab_id}/devices
+- /labs/{lab_id}/pcs
+- /labs/{lab_id}/pcs/{pc_id}
+- /labs/{lab_id}/pcs/{pc_id}/devices/{device_id}
+- /alerts
+- /events
+
+Useful table columns:
+- device_events: event_id, lab_id, pc_id, device_id, device_label, device_type, status, severity, alert_status, observed_at, agent_time, received_at, source, details_json
+- device_state_current: lab_id, pc_id, device_id, device_label, device_type, current_status, severity, alert_status, rssi, pending_since, updated_at
+- pc_heartbeat: lab_id, pc_id, pc_status, last_seen, agent_version, updated_at
+- pending_window: lab_id, pc_id, device_id, started_at, timeout_sec, confirmed, payload_json
+
+WHAT THE PROJECT DEMONSTRATES
+=============================
+AATS demonstrates an end-to-end IoT monitoring chain:
+- sensing at the edge,
+- messaging over MQTT,
+- server-side alert logic,
+- persistent storage,
+- and a dashboard that can be used for live monitoring and report screenshots.
+
+The demo scenarios are the same ones used in the README:
+- USB removal becomes warning first, then critical if the device stays disconnected.
+- Bluetooth moving out of range becomes weak signal first, then critical if it stays away.
+- An abrupt PC shutdown appears as offline through MQTT Last Will and Testament.
+
+LIMITATIONS
+===========
+The current code is still a lab prototype:
+- it uses a single shared admin account,
+- MQTT and HTTP are not TLS-protected by default,
+- and SQLite is good for a small deployment but not for a large campus-scale system.
