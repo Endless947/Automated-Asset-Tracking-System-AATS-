@@ -64,6 +64,27 @@ class Database:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS excluded_pcs (
+                    lab_id TEXT NOT NULL,
+                    pc_id TEXT NOT NULL,
+                    removed_at TEXT NOT NULL,
+                    PRIMARY KEY (lab_id, pc_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS excluded_devices (
+                    lab_id TEXT NOT NULL,
+                    pc_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    removed_at TEXT NOT NULL,
+                    PRIMARY KEY (lab_id, pc_id, device_id)
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS pc_heartbeat (
                     lab_id TEXT NOT NULL,
                     pc_id TEXT NOT NULL,
@@ -99,8 +120,63 @@ class Database:
                 """
             )
 
+    def _is_pc_excluded(self, conn: sqlite3.Connection, lab_id: str, pc_id: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM excluded_pcs WHERE lab_id = ? AND pc_id = ?",
+            (lab_id, pc_id),
+        ).fetchone()
+        return row is not None
+
+    def _is_device_excluded(self, conn: sqlite3.Connection, lab_id: str, pc_id: str, device_id: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM excluded_devices WHERE lab_id = ? AND pc_id = ? AND device_id = ?",
+            (lab_id, pc_id, device_id),
+        ).fetchone()
+        return row is not None
+
+    def is_pc_excluded(self, lab_id: str, pc_id: str) -> bool:
+        with self._conn() as conn:
+            return self._is_pc_excluded(conn, lab_id, pc_id)
+
+    def is_device_excluded(self, lab_id: str, pc_id: str, device_id: str) -> bool:
+        with self._conn() as conn:
+            return self._is_device_excluded(conn, lab_id, pc_id, device_id)
+
+    def remove_pc_from_tracking(self, lab_id: str, pc_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO excluded_pcs (lab_id, pc_id, removed_at)
+                VALUES (?, ?, ?)
+                """,
+                (lab_id, pc_id, now_iso()),
+            )
+            conn.execute("DELETE FROM pc_heartbeat WHERE lab_id = ? AND pc_id = ?", (lab_id, pc_id))
+            conn.execute("DELETE FROM device_state_current WHERE lab_id = ? AND pc_id = ?", (lab_id, pc_id))
+            conn.execute("DELETE FROM pending_window WHERE lab_id = ? AND pc_id = ?", (lab_id, pc_id))
+
+    def remove_device_from_tracking(self, lab_id: str, pc_id: str, device_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO excluded_devices (lab_id, pc_id, device_id, removed_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (lab_id, pc_id, device_id, now_iso()),
+            )
+            conn.execute(
+                "DELETE FROM device_state_current WHERE lab_id = ? AND pc_id = ? AND device_id = ?",
+                (lab_id, pc_id, device_id),
+            )
+            conn.execute(
+                "DELETE FROM pending_window WHERE lab_id = ? AND pc_id = ? AND device_id = ?",
+                (lab_id, pc_id, device_id),
+            )
+
     def upsert_heartbeat(self, payload: Dict[str, Any]) -> None:
         with self._conn() as conn:
+            if self._is_pc_excluded(conn, payload["lab_id"], payload["pc_id"]):
+                return
             conn.execute(
                 """
                 INSERT INTO pc_heartbeat (lab_id, pc_id, pc_status, last_seen, agent_version, updated_at)
@@ -129,6 +205,10 @@ class Database:
         pending_since: Optional[str],
     ) -> None:
         with self._conn() as conn:
+            if self._is_pc_excluded(conn, payload["lab_id"], payload["pc_id"]):
+                return
+            if self._is_device_excluded(conn, payload["lab_id"], payload["pc_id"], payload["device_id"]):
+                return
             conn.execute(
                 """
                 INSERT INTO device_state_current (
@@ -162,6 +242,10 @@ class Database:
 
     def insert_event(self, payload: Dict[str, Any], severity: str, alert_status: str, details: Optional[Dict[str, Any]] = None) -> None:
         with self._conn() as conn:
+            if self._is_pc_excluded(conn, payload["lab_id"], payload["pc_id"]):
+                return
+            if self._is_device_excluded(conn, payload["lab_id"], payload["pc_id"], payload["device_id"]):
+                return
             conn.execute(
                 """
                 INSERT OR IGNORE INTO device_events (
@@ -194,7 +278,17 @@ class Database:
             rows = conn.execute(
                 """
                 SELECT * FROM device_state_current
-                WHERE lab_id = ?
+                                WHERE lab_id = ?
+                                    AND NOT EXISTS (
+                                        SELECT 1 FROM excluded_pcs p
+                                        WHERE p.lab_id = device_state_current.lab_id AND p.pc_id = device_state_current.pc_id
+                                    )
+                                    AND NOT EXISTS (
+                                        SELECT 1 FROM excluded_devices d
+                                        WHERE d.lab_id = device_state_current.lab_id
+                                            AND d.pc_id = device_state_current.pc_id
+                                            AND d.device_id = device_state_current.device_id
+                                    )
                 ORDER BY pc_id, device_type, device_id
                 """,
                 (lab_id,),
@@ -255,7 +349,11 @@ class Database:
                 """
                 SELECT *
                 FROM pc_heartbeat
-                WHERE lab_id = ?
+                                WHERE lab_id = ?
+                                    AND NOT EXISTS (
+                                        SELECT 1 FROM excluded_pcs p
+                                        WHERE p.lab_id = pc_heartbeat.lab_id AND p.pc_id = pc_heartbeat.pc_id
+                                    )
                 ORDER BY pc_id
                 """,
                 (lab_id,),
@@ -346,8 +444,12 @@ class Database:
         with self._conn() as conn:
             rows = conn.execute(
                 """
-                SELECT p.lab_id, COUNT(DISTINCT p.pc_id) as pc_count
-                FROM pc_heartbeat p
+                                SELECT p.lab_id, COUNT(DISTINCT p.pc_id) as pc_count
+                                FROM pc_heartbeat p
+                                WHERE NOT EXISTS (
+                                        SELECT 1 FROM excluded_pcs e
+                                        WHERE e.lab_id = p.lab_id AND e.pc_id = p.pc_id
+                                )
                 GROUP BY p.lab_id
                 ORDER BY p.lab_id
                 """
@@ -357,12 +459,35 @@ class Database:
             for row in rows:
                 lab_id = row["lab_id"]
                 pc_count = row["pc_count"]
-                device_count = conn.execute("SELECT COUNT(*) FROM device_state_current WHERE lab_id = ?", (lab_id, )).fetchone()[0]
+                                device_count = conn.execute(
+                                        """
+                                        SELECT COUNT(*)
+                                        FROM device_state_current d
+                                        WHERE d.lab_id = ?
+                                            AND NOT EXISTS (
+                                                SELECT 1 FROM excluded_pcs p
+                                                WHERE p.lab_id = d.lab_id AND p.pc_id = d.pc_id
+                                            )
+                                            AND NOT EXISTS (
+                                                SELECT 1 FROM excluded_devices e
+                                                WHERE e.lab_id = d.lab_id AND e.pc_id = d.pc_id AND e.device_id = d.device_id
+                                            )
+                                        """,
+                                        (lab_id, )
+                                ).fetchone()[0]
                 status_counts = conn.execute(
                     """
                     SELECT current_status, COUNT(*) as cnt 
-                    FROM device_state_current 
-                    WHERE lab_id = ? 
+                                        FROM device_state_current d
+                                        WHERE d.lab_id = ?
+                                            AND NOT EXISTS (
+                                                SELECT 1 FROM excluded_pcs p
+                                                WHERE p.lab_id = d.lab_id AND p.pc_id = d.pc_id
+                                            )
+                                            AND NOT EXISTS (
+                                                SELECT 1 FROM excluded_devices e
+                                                WHERE e.lab_id = d.lab_id AND e.pc_id = d.pc_id AND e.device_id = d.device_id
+                                            )
                     GROUP BY current_status
                     """, 
                     (lab_id, )

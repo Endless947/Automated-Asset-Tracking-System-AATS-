@@ -43,6 +43,7 @@ In evaluations you can demonstrate AATS using these example flows:
 - `admin_dashboard/`:
   - Device state grid (green/yellow/red)
   - Event/alert table
+  - Per-PC controls to remove an entire PC from tracking, plus per-device removal from a specific PC
   - Auto-refresh + audio/beep on new critical alerts
 
 ## MQTT topics
@@ -55,6 +56,8 @@ In evaluations you can demonstrate AATS using these example flows:
 - `GET /health`
 - `GET /labs/{lab_id}/devices`
 - `GET /labs/{lab_id}/pcs`
+- `DELETE /labs/{lab_id}/pcs/{pc_id}`
+- `DELETE /labs/{lab_id}/pcs/{pc_id}/devices/{device_id}`
 - `GET /alerts?from=&to=&severity=&status=`
 - `GET /events?lab_id=&pc_id=&device_id=&severity=&status=&from=&to=&limit=`
 - `POST /auth/login`

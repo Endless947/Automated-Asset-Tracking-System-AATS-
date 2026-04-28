@@ -47,6 +47,22 @@ function severityClass(severity) {
   return "status-offline";
 }
 
+function pcStatusClass(pcStatus) {
+  const normalized = (pcStatus || "").toLowerCase();
+  if (normalized.includes("online")) return "status-ok";
+  if (normalized.includes("offline")) return "status-offline";
+  return "status-warning";
+}
+
+async function deleteTrackingResource(url, confirmMessage) {
+  if (!window.confirm(confirmMessage)) {
+    return false;
+  }
+
+  await fetchJson(url, { method: "DELETE" });
+  return true;
+}
+
 // -----------------------------------------------------
 // LOGIN PAGE LOGIC
 // -----------------------------------------------------
@@ -170,12 +186,11 @@ if (window.location.pathname.endsWith("dashboard.html")) {
         document.getElementById("criticalDevicesCount").parentElement.style.color = 'var(--status-critical-text)';
       }
 
-      // Render Devices Grid
       const grid = document.getElementById("deviceGrid");
       grid.innerHTML = "";
       
-      if (!devices.length) {
-        grid.innerHTML = `<div class="empty-state">No devices found in this lab.</div>`;
+      if (!pcs.length) {
+        grid.innerHTML = `<div class="empty-state">No PCs are currently tracked in this lab.</div>`;
         return;
       }
 
@@ -186,28 +201,147 @@ if (window.location.pathname.endsWith("dashboard.html")) {
         return true;
       });
 
-      filteredDevices.forEach(d => {
-        const card = document.createElement("a");
-        card.className = "card";
-        card.href = `device.html?lab=${encodeURIComponent(labId)}&pc=${encodeURIComponent(d.pc_id)}&device=${encodeURIComponent(d.device_id)}`;
-        
-        // Determine if this device state is stale (server time vs client time may differ)
-        const updatedAt = Date.parse(d.updated_at);
-        const isStale = Number.isFinite(updatedAt) && (Date.now() - updatedAt) > HEARTBEAT_STALE_MS;
-
-        card.innerHTML = `
-          <div class="card-header">
-            <div class="card-title">${d.device_label || d.device_id}</div>
-            <span class="badge ${severityClass(d.severity)}">${d.current_status || 'UNKNOWN'}</span>
-            ${isStale ? `<span class="badge status-offline" style="margin-left:8px">STALE</span>` : ''}
-          </div>
-          <p class="meta-info">Type: <strong>${d.device_type}</strong></p>
-          <p class="meta-info">PC Host: ${d.pc_id}</p>
-          ${d.alert_status === 'PENDING' ? `<p class="meta-info" style="color:var(--status-warning-text)">Debouncing state...</p>` : ''}
-          <div class="meta-info" style="margin-top:auto">Added/Updated: ${new Date(d.updated_at).toLocaleTimeString()}</div>
-        `;
-        grid.appendChild(card);
+      const devicesByPc = new Map();
+      filteredDevices.forEach((device) => {
+        const group = devicesByPc.get(device.pc_id) || [];
+        group.push(device);
+        devicesByPc.set(device.pc_id, group);
       });
+
+      pcs
+        .slice()
+        .sort((left, right) => left.pc_id.localeCompare(right.pc_id))
+        .forEach((pc) => {
+          const pcDevices = (devicesByPc.get(pc.pc_id) || []).slice().sort((left, right) => {
+            const typeCompare = (left.device_type || "").localeCompare(right.device_type || "");
+            if (typeCompare !== 0) return typeCompare;
+            return (left.device_id || "").localeCompare(right.device_id || "");
+          });
+
+          const section = document.createElement("section");
+          section.className = "pc-section";
+
+          const header = document.createElement("div");
+          header.className = "pc-header";
+          header.innerHTML = `
+            <div>
+              <div class="pc-title">PC ${pc.pc_id}</div>
+              <div class="pc-meta">${pc.pc_status || 'unknown'}${pc.last_seen ? ` • Last seen ${new Date(pc.last_seen).toLocaleString()}` : ''}</div>
+            </div>
+            <span class="badge ${pcStatusClass(pc.pc_status)}">${pc.pc_status || 'unknown'}</span>
+          `;
+
+          const actions = document.createElement("div");
+          actions.className = "pc-actions";
+
+          const removePcButton = document.createElement("button");
+          removePcButton.type = "button";
+          removePcButton.className = "btn btn-danger";
+          removePcButton.textContent = "Remove PC from tracking";
+          removePcButton.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            try {
+              await deleteTrackingResource(
+                `${API_BASE}/labs/${encodeURIComponent(labId)}/pcs/${encodeURIComponent(pc.pc_id)}`,
+                `Remove PC ${pc.pc_id} and all of its devices from tracking?`
+              );
+              await loadDashboard();
+            } catch (err) {
+              console.error(err);
+              window.alert(`Failed to remove PC ${pc.pc_id} from tracking.`);
+            }
+          });
+
+          actions.appendChild(removePcButton);
+          header.appendChild(actions);
+          section.appendChild(header);
+
+          if (pcDevices.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "empty-state";
+            empty.textContent = typeFilter
+              ? "No devices on this PC match the current filter."
+              : "No device states are currently tracked for this PC.";
+            section.appendChild(empty);
+            grid.appendChild(section);
+            return;
+          }
+
+          const deviceGrid = document.createElement("div");
+          deviceGrid.className = "grid pc-device-grid";
+
+          pcDevices.forEach((device) => {
+            const card = document.createElement("div");
+            card.className = "card device-card";
+            card.tabIndex = 0;
+
+            const updatedAt = Date.parse(device.updated_at);
+            const isStale = Number.isFinite(updatedAt) && (Date.now() - updatedAt) > HEARTBEAT_STALE_MS;
+
+            card.innerHTML = `
+              <div class="card-header">
+                <div class="card-title">${device.device_label || device.device_id}</div>
+                <span class="badge ${severityClass(device.severity)}">${device.current_status || 'UNKNOWN'}</span>
+                ${isStale ? `<span class="badge status-offline" style="margin-left:8px">STALE</span>` : ''}
+              </div>
+              <p class="meta-info">Type: <strong>${device.device_type}</strong></p>
+              <p class="meta-info">PC Host: ${device.pc_id}</p>
+              ${device.alert_status === 'PENDING' ? `<p class="meta-info" style="color:var(--status-warning-text)">Debouncing state...</p>` : ''}
+              <div class="card-actions">
+                <button type="button" class="btn btn-outline" data-action="view">View details</button>
+                <button type="button" class="btn btn-danger" data-action="remove-device">Remove device</button>
+              </div>
+              <div class="meta-info" style="margin-top:auto">Added/Updated: ${new Date(device.updated_at).toLocaleTimeString()}</div>
+            `;
+
+            card.addEventListener("click", (event) => {
+              if (event.target && event.target instanceof HTMLElement && event.target.closest("button")) {
+                return;
+              }
+              window.location.href = `device.html?lab=${encodeURIComponent(labId)}&pc=${encodeURIComponent(device.pc_id)}&device=${encodeURIComponent(device.device_id)}`;
+            });
+
+            card.addEventListener("keydown", (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                window.location.href = `device.html?lab=${encodeURIComponent(labId)}&pc=${encodeURIComponent(device.pc_id)}&device=${encodeURIComponent(device.device_id)}`;
+              }
+            });
+
+            const viewButton = card.querySelector('[data-action="view"]');
+            if (viewButton) {
+              viewButton.addEventListener("click", () => {
+                window.location.href = `device.html?lab=${encodeURIComponent(labId)}&pc=${encodeURIComponent(device.pc_id)}&device=${encodeURIComponent(device.device_id)}`;
+              });
+            }
+
+            const removeDeviceButton = card.querySelector('[data-action="remove-device"]');
+            if (removeDeviceButton) {
+              removeDeviceButton.addEventListener("click", async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                try {
+                  await deleteTrackingResource(
+                    `${API_BASE}/labs/${encodeURIComponent(labId)}/pcs/${encodeURIComponent(device.pc_id)}/devices/${encodeURIComponent(device.device_id)}`,
+                    `Remove device ${device.device_label || device.device_id} from tracking?`
+                  );
+                  await loadDashboard();
+                } catch (err) {
+                  console.error(err);
+                  window.alert(`Failed to remove device ${device.device_id} from tracking.`);
+                }
+              });
+            }
+
+            deviceGrid.appendChild(card);
+          });
+
+          section.appendChild(deviceGrid);
+          grid.appendChild(section);
+        });
 
     } catch (err) {
       console.error("Dashboard error", err);
@@ -237,6 +371,22 @@ if (window.location.pathname.endsWith("device.html")) {
   }
 
   document.getElementById("deviceBreadcrumb").textContent = `${labId} / ${deviceId}`;
+  const removeDeviceButton = document.getElementById("removeDeviceBtn");
+
+  if (removeDeviceButton) {
+    removeDeviceButton.addEventListener("click", async () => {
+      try {
+        await deleteTrackingResource(
+          `${API_BASE}/labs/${encodeURIComponent(labId)}/pcs/${encodeURIComponent(pcId)}/devices/${encodeURIComponent(deviceId)}`,
+          `Remove device ${deviceId} from tracking?`
+        );
+        window.location.href = `dashboard.html?lab=${encodeURIComponent(labId)}`;
+      } catch (err) {
+        console.error(err);
+        window.alert(`Failed to remove device ${deviceId} from tracking.`);
+      }
+    });
+  }
 
   function determineIcon(type) {
     if(type === 'bluetooth') return 'Bluetooth';

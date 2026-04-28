@@ -73,10 +73,17 @@ def timeout_for(payload: Dict) -> int:
 
 
 def handle_status(payload: Dict) -> None:
+    if db.is_pc_excluded(payload["lab_id"], payload["pc_id"]):
+        return
     db.upsert_heartbeat(payload)
 
 
 def handle_event(payload: Dict) -> None:
+    if db.is_pc_excluded(payload["lab_id"], payload["pc_id"]):
+        return
+    if db.is_device_excluded(payload["lab_id"], payload["pc_id"], payload["device_id"]):
+        return
+
     key = (payload["lab_id"], payload["pc_id"], payload["device_id"])
     status = payload["status"]
 
@@ -218,6 +225,24 @@ def get_lab_pcs(lab_id: str, _: None = Depends(require_admin)):
     except Exception:
         pass
     return db.list_pc_heartbeat(lab_id)
+
+
+@app.delete("/labs/{lab_id}/pcs/{pc_id}")
+def remove_lab_pc_from_tracking(lab_id: str, pc_id: str, _: None = Depends(require_admin)):
+    with _pending_lock:
+        keys_to_remove = [key for key in pending if key[0] == lab_id and key[1] == pc_id]
+        for key in keys_to_remove:
+            pending.pop(key, None)
+    db.remove_pc_from_tracking(lab_id, pc_id)
+    return {"status": "removed", "lab_id": lab_id, "pc_id": pc_id}
+
+
+@app.delete("/labs/{lab_id}/pcs/{pc_id}/devices/{device_id}")
+def remove_lab_device_from_tracking(lab_id: str, pc_id: str, device_id: str, _: None = Depends(require_admin)):
+    with _pending_lock:
+        pending.pop((lab_id, pc_id, device_id), None)
+    db.remove_device_from_tracking(lab_id, pc_id, device_id)
+    return {"status": "removed", "lab_id": lab_id, "pc_id": pc_id, "device_id": device_id}
 
 
 @app.get("/alerts")

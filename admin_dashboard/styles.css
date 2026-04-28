@@ -253,6 +253,16 @@ a:hover {
 
 .btn-outline:hover { background-color: var(--bg-color); color: var(--text-primary); }
 
+.btn-danger {
+  background-color: #dc2626;
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background-color: #b91c1c;
+  color: #fff;
+}
+
 input, select {
   width: 100%;
   padding: 10px 12px;
@@ -292,6 +302,50 @@ input:focus, select:focus {
   letter-spacing: 0.5px;
   margin-bottom: var(--spacing-sm);
   display: block;
+}
+
+.pc-section {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: var(--spacing-lg);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.pc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+}
+
+.pc-title {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.pc-meta {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  margin-top: 4px;
+}
+
+.pc-actions,
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+
+.device-card {
+  cursor: pointer;
+}
+
+.pc-device-grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
 }
 
 /* Forms */
