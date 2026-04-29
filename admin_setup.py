@@ -430,19 +430,35 @@ def ensure_server_requirements(base_dir: str) -> None:
     print("[+] FastAPI server dependencies installed.")
 
 
-def wait_for_api_ready(timeout_sec: int = 20) -> bool:
-    """Wait until the FastAPI health endpoint responds successfully."""
+def wait_for_api_ready(local_ip: str | None = None, timeout_sec: int = 60) -> bool:
+    """Wait until the FastAPI health endpoint responds successfully.
+
+    Tests multiple candidate addresses (127.0.0.1, localhost, and the
+    optionally provided local_ip) to be resilient to binding/hostname
+    differences and transient startup delays.
+    """
     deadline = time.time() + timeout_sec
-    health_url = f"http://127.0.0.1:{API_PORT}/health"
+    candidates = [f"http://127.0.0.1:{API_PORT}/health", f"http://localhost:{API_PORT}/health"]
+    if local_ip:
+        candidates.append(f"http://{local_ip}:{API_PORT}/health")
+
+    last_exc: Exception | None = None
 
     while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(health_url, timeout=2) as response:
-                if response.status == 200:
-                    return True
-        except Exception:
-            time.sleep(1)
+        for url in candidates:
+            try:
+                with urllib.request.urlopen(url, timeout=2) as response:
+                    if response.status == 200:
+                        return True
+            except Exception as e:
+                last_exc = e
+                # try next candidate
+                continue
+        time.sleep(1)
 
+    # helpful diagnostics for the user
+    if last_exc is not None:
+        print(f"[!] API readiness check failed: last error: {last_exc}")
     return False
 
 
@@ -545,7 +561,7 @@ def main() -> None:
     ensure_server_requirements(base_dir)
 
     fastapi_proc   = start_fastapi(base_dir)
-    if not wait_for_api_ready():
+    if not wait_for_api_ready(ip):
         print(f"[!] FastAPI did not become ready on port {API_PORT}.")
         print("    Check the console output above for import errors or startup failures.")
         input("Press Enter to exit...")

@@ -1,18 +1,91 @@
 /* admin_dashboard/script.js */
 const API_BASE = "http://127.0.0.1:8000";
+const TOKEN_KEY = "aats_admin_token";
 // Client-side staleness threshold (ms). Matches server default `AATS_HEARTBEAT_STALENESS_SEC` (120s).
 const HEARTBEAT_STALE_MS = 120 * 1000;
 
-let adminToken = localStorage.getItem("aats_admin_token");
+function readTokenFromUrl() {
+  const token = new URLSearchParams(window.location.search).get("aats_token");
+  return token && token.trim() ? token.trim() : null;
+}
+
+function getStoredToken() {
+  try {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (token && token.trim()) return token.trim();
+  } catch (err) {
+    // Ignore storage access issues and continue with URL fallback.
+  }
+  return null;
+}
+
+function setStoredToken(token) {
+  if (!token || !token.trim()) return;
+  try {
+    localStorage.setItem(TOKEN_KEY, token.trim());
+  } catch (err) {
+    // Ignore storage access issues. URL fallback still works on this session.
+  }
+}
+
+function clearStoredToken() {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch (err) {
+    // Ignore storage access issues.
+  }
+}
+
+function buildAppUrl(path, extraParams = {}) {
+  const url = new URL(path, window.location.href);
+  Object.entries(extraParams).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  // file:// origins can isolate storage; keep token in navigation as fallback.
+  if (window.location.protocol === "file:" && adminToken) {
+    url.searchParams.set("aats_token", adminToken);
+  }
+
+  return `${url.pathname}${url.search}`;
+}
+
+function propagateAuthTokenInLinks() {
+  if (window.location.protocol !== "file:" || !adminToken) return;
+
+  document.querySelectorAll('a[href]').forEach((anchor) => {
+    const rawHref = anchor.getAttribute('href');
+    if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) return;
+
+    const url = new URL(rawHref, window.location.href);
+    if (!url.pathname.toLowerCase().endsWith('.html')) return;
+    url.searchParams.set('aats_token', adminToken);
+    anchor.setAttribute('href', `${url.pathname}${url.search}`);
+  });
+}
+
+let adminToken = getStoredToken() || readTokenFromUrl();
+if (adminToken) {
+  setStoredToken(adminToken);
+}
+
 const isLoginPage = window.location.pathname.endsWith("login.html");
 
 if (!adminToken && !isLoginPage) {
-  window.location.href = "login.html";
+  window.location.href = buildAppUrl("login.html");
 }
+
+if (adminToken && isLoginPage) {
+  window.location.href = buildAppUrl("index.html");
+}
+
+window.addEventListener("DOMContentLoaded", propagateAuthTokenInLinks);
 
 async function fetchJson(url, options = {}) {
   if (!adminToken && !isLoginPage) {
-    window.location.href = "login.html";
+    window.location.href = buildAppUrl("login.html");
     throw new Error("Not authenticated");
   }
 
@@ -26,8 +99,9 @@ async function fetchJson(url, options = {}) {
   });
 
   if (res.status === 401 && !isLoginPage) {
-    localStorage.removeItem("aats_admin_token");
-    window.location.href = "login.html";
+    clearStoredToken();
+    adminToken = null;
+    window.location.href = buildAppUrl("login.html");
     throw new Error("Unauthorized");
   }
 
@@ -69,11 +143,20 @@ async function deleteTrackingResource(url, confirmMessage) {
 if (isLoginPage) {
   const loginForm = document.getElementById("loginForm");
   if (loginForm) {
+    // Attach listener to form submit event (triggered by button click or Enter key)
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const username = loginForm.username.value;
-      const password = loginForm.password.value;
+      e.stopPropagation();
+      
+      const username = loginForm.username.value.trim();
+      const password = loginForm.password.value.trim();
       const errorDiv = document.getElementById("loginError");
+
+      if (!username || !password) {
+        errorDiv.textContent = "Username and password are required.";
+        errorDiv.style.display = "block";
+        return;
+      }
 
       try {
         const res = await fetchJson(`${API_BASE}/auth/login`, {
@@ -81,8 +164,9 @@ if (isLoginPage) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username, password })
         });
-        localStorage.setItem("aats_admin_token", res.token);
-        window.location.href = "index.html";
+        adminToken = res.token;
+        setStoredToken(res.token);
+        window.location.href = buildAppUrl("index.html");
       } catch (err) {
         if (err instanceof TypeError || /fetch|network|failed to fetch|connection refused/i.test(err.message)) {
           errorDiv.textContent = "Admin API is not running. Start admin_setup.exe as Administrator, or run the FastAPI server on port 8000.";
@@ -115,7 +199,7 @@ if (window.location.pathname.endsWith("index.html") || window.location.pathname 
       labs.forEach(lab => {
         const card = document.createElement("a");
         card.className = "card";
-        card.href = `dashboard.html?lab=${encodeURIComponent(lab.lab_id)}`;
+        card.href = buildAppUrl("dashboard.html", { lab: lab.lab_id });
         
         let statusHtml = '';
         if (lab.status_summary) {
@@ -154,7 +238,7 @@ if (window.location.pathname.endsWith("dashboard.html")) {
   const labId = params.get("lab");
   
   if (!labId) {
-    window.location.href = "index.html";
+    window.location.href = buildAppUrl("index.html");
   }
 
   document.getElementById("selectedLabName").textContent = labId;
@@ -193,7 +277,6 @@ if (window.location.pathname.endsWith("dashboard.html")) {
         document.getElementById("criticalDevicesCount").parentElement.style.color = 'var(--status-critical-text)';
       }
 
-      const grid = document.getElementById("deviceGrid");
       grid.innerHTML = "";
       
       if (!pcs.length) {
@@ -307,20 +390,32 @@ if (window.location.pathname.endsWith("dashboard.html")) {
               if (event.target && event.target instanceof HTMLElement && event.target.closest("button")) {
                 return;
               }
-              window.location.href = `device.html?lab=${encodeURIComponent(labId)}&pc=${encodeURIComponent(device.pc_id)}&device=${encodeURIComponent(device.device_id)}`;
+              window.location.href = buildAppUrl("device.html", {
+                lab: labId,
+                pc: device.pc_id,
+                device: device.device_id,
+              });
             });
 
             card.addEventListener("keydown", (event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                window.location.href = `device.html?lab=${encodeURIComponent(labId)}&pc=${encodeURIComponent(device.pc_id)}&device=${encodeURIComponent(device.device_id)}`;
+                window.location.href = buildAppUrl("device.html", {
+                  lab: labId,
+                  pc: device.pc_id,
+                  device: device.device_id,
+                });
               }
             });
 
             const viewButton = card.querySelector('[data-action="view"]');
             if (viewButton) {
               viewButton.addEventListener("click", () => {
-                window.location.href = `device.html?lab=${encodeURIComponent(labId)}&pc=${encodeURIComponent(device.pc_id)}&device=${encodeURIComponent(device.device_id)}`;
+                window.location.href = buildAppUrl("device.html", {
+                  lab: labId,
+                  pc: device.pc_id,
+                  device: device.device_id,
+                });
               });
             }
 
@@ -513,7 +608,7 @@ if (window.location.pathname.endsWith("device.html")) {
   const deviceId = params.get("device");
 
   if (!labId || !deviceId) {
-    window.location.href = "index.html";
+    window.location.href = buildAppUrl("index.html");
   }
 
   document.getElementById("deviceBreadcrumb").textContent = `${labId} / ${deviceId}`;
@@ -526,7 +621,7 @@ if (window.location.pathname.endsWith("device.html")) {
           `${API_BASE}/labs/${encodeURIComponent(labId)}/pcs/${encodeURIComponent(pcId)}/devices/${encodeURIComponent(deviceId)}`,
           `Remove device ${deviceId} from tracking?`
         );
-        window.location.href = `dashboard.html?lab=${encodeURIComponent(labId)}`;
+        window.location.href = buildAppUrl("dashboard.html", { lab: labId });
       } catch (err) {
         console.error(err);
         window.alert(`Failed to remove device ${deviceId} from tracking.`);
