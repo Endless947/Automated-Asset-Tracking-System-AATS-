@@ -137,6 +137,29 @@ async function deleteTrackingResource(url, confirmMessage) {
   return true;
 }
 
+async function promptAddLab() {
+  const labId = window.prompt('Enter new lab/room id (e.g. lab1):');
+  if (!labId) return;
+  const trimmed = labId.trim();
+  if (!trimmed) return;
+  try {
+    await fetchJson(`${API_BASE}/labs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lab_id: trimmed }),
+    });
+    // If we're on the index page, refresh the list in-place.
+    if (window.location.pathname.endsWith('index.html') || window.location.pathname === '/') {
+      try { await loadLabs(); } catch (e) { window.location.reload(); }
+    } else {
+      window.location.href = buildAppUrl('index.html');
+    }
+  } catch (err) {
+    console.error('Create lab failed', err);
+    window.alert('Failed to create lab. Ensure API is running and you are authenticated.');
+  }
+}
+
 // -----------------------------------------------------
 // LOGIN PAGE LOGIC
 // -----------------------------------------------------

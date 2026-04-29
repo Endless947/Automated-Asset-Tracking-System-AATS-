@@ -56,6 +56,10 @@ class LoginResult(BaseModel):
     token: str
 
 
+class CreateLabRequest(BaseModel):
+    lab_id: str
+
+
 def severity_for(status: str) -> str:
     if status == "CONNECTED":
         return "OK"
@@ -211,6 +215,17 @@ def login(body: LoginRequest) -> LoginResult:
 @app.get("/labs")
 def get_labs(_: None = Depends(require_admin)):
     return db.list_labs()
+
+
+@app.post("/labs")
+def create_lab(body: CreateLabRequest, _: None = Depends(require_admin)):
+    if not body.lab_id or not body.lab_id.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="lab_id is required")
+    try:
+        db.create_lab(body.lab_id.strip())
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    return {"status": "created", "lab_id": body.lab_id.strip()}
 
 
 @app.get("/labs/{lab_id}/devices")

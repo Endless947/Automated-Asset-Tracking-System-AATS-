@@ -501,3 +501,20 @@ class Database:
                     "status_summary": {s["current_status"]: s["cnt"] for s in status_counts}
                 })
             return lab_list
+
+    def create_lab(self, lab_id: str) -> None:
+        """Create a minimal placeholder entry so the UI can show an empty lab.
+
+        This inserts a single placeholder PC heartbeat row for the given lab_id.
+        The placeholder PC id is a reserved sentinel so it can be removed later
+        by the admin if desired.
+        """
+        placeholder_pc = "__placeholder__"
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO pc_heartbeat (lab_id, pc_id, pc_status, last_seen, agent_version, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (lab_id, placeholder_pc, "offline", None, None, now_iso()),
+            )

@@ -20,6 +20,8 @@ import sys
 import time
 import winreg
 import ctypes
+import urllib.request
+import urllib.error
 
 # ── Configuration ──────────────────────────────────────────
 BROADCAST_PORT    = 37020
@@ -212,6 +214,81 @@ def get_pc_id() -> str:
             return pc_id
 
 
+def fetch_labs_from_admin(admin_ip: str) -> list[str] | None:
+    """Attempt to fetch the list of configured labs from the admin API.
+
+    Returns a list of lab_id strings on success, an empty list if no labs,
+    or None if the request could not be authenticated or reached.
+    """
+    base = f"http://{admin_ip}:8000"
+    url = f"{base}/labs"
+    # Try common default token (admin) first, then unauthenticated.
+    headers = {"x-admin-token": "admin"}
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = resp.read()
+            try:
+                labs = json.loads(data.decode())
+                if isinstance(labs, list):
+                    return [l.get("lab_id") for l in labs if isinstance(l, dict) and l.get("lab_id")]
+            except Exception:
+                return None
+    except urllib.error.HTTPError as e:
+        # 401/403 likely — cannot authenticate with default token
+        return None
+    except Exception:
+        return None
+
+
+def choose_lab(admin_ip: str) -> str:
+    """Prompt user to select an existing lab (when fetchable) or enter one manually.
+
+    If the admin API is reachable and returns a non-empty list, the user must
+    choose one of those labs. If the API cannot be reached or authentication
+    fails, the user may enter a lab id manually; they will be warned that it
+    could not be verified.
+    """
+    labs = fetch_labs_from_admin(admin_ip)
+    if labs is None:
+        print("[!] Could not verify available labs with Admin API (authentication or network issue).")
+        while True:
+            lab = input("[?] Enter the lab/room id this PC belongs to (unverified): ").strip()
+            if not lab:
+                continue
+            confirm = input(f"Proceed with lab '{lab}' without verification? (y/N): ").strip().lower()
+            if confirm == "y":
+                return lab
+            print("Try again or ensure the Admin PC is running with default admin credentials.")
+
+    if len(labs) == 0:
+        print("[!] Admin API reports no labs are configured. Create a lab from the Admin dashboard first.")
+        while True:
+            lab = input("[?] Enter lab id to use (will be created when this agent connects): ").strip()
+            if lab:
+                return lab
+
+    # Present selectable list
+    print("[*] Available labs:")
+    for i, l in enumerate(labs, start=1):
+        print(f"    {i}. {l}")
+
+    while True:
+        choice = input("[?] Select a lab by number or enter the lab id: ").strip()
+        if not choice:
+            continue
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(labs):
+                return labs[idx]
+            print("Invalid selection number; try again.")
+            continue
+        # textual id entered
+        if choice in labs:
+            return choice
+        print("No such lab exists; please try again.")
+
+
 # ── Step 3: Scan USB Devices ────────────────────────────────
 
 def scan_usb_devices() -> list[dict]:
@@ -287,9 +364,9 @@ def pick_usb_devices(devices: list[dict]) -> list[dict]:
 
 # ── Step 4: Write config.json ───────────────────────────────
 
-def write_config(base_dir: str, admin_ip: str, pc_id: str, usb_devices: list[dict]) -> None:
+def write_config(base_dir: str, admin_ip: str, lab_id: str, pc_id: str, usb_devices: list[dict]) -> None:
     cfg = {
-        "lab_id": "LAB1",
+        "lab_id": lab_id,
         "pc_id": pc_id,
         "broker": admin_ip,
         "port": 1883,
@@ -412,12 +489,15 @@ def main() -> None:
     # Step 2 — PC ID
     pc_id = get_pc_id()
 
+    # Step 2b — Lab selection (verify against Admin API when possible)
+    lab_id = choose_lab(admin_ip)
+
     # Step 3 — Scan and pick USB devices
     usb_devices_raw = scan_usb_devices()
     usb_devices     = pick_usb_devices(usb_devices_raw)
 
-    # Step 4 — Write config.json
-    write_config(base_dir, admin_ip, pc_id, usb_devices)
+    # Step 4 — Write config.json (includes selected lab)
+    write_config(base_dir, admin_ip, lab_id, pc_id, usb_devices)
 
     # Step 5 — Configure startup mode
     startup_mode = setup_startup_mode(base_dir)
@@ -426,6 +506,7 @@ def main() -> None:
     print("  Setup complete!")
     print(f"  Admin IP  : {admin_ip}")
     print(f"  PC ID     : {pc_id}")
+    print(f"  Lab ID    : {lab_id}")
     print(f"  Devices   : {len(usb_devices)} USB device(s) configured")
     if startup_mode == "service":
         print("  Auto-start: Windows service (boot resilient)")
