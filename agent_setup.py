@@ -28,6 +28,7 @@ BROADCAST_TIMEOUT = 30   # seconds to wait for admin broadcast before asking man
 STARTUP_REG_NAME  = "AATSAgent"
 STARTUP_REG_KEY   = r"Software\Microsoft\Windows\CurrentVersion\Run"
 AGENT_SERVICE_NAME = "AATSAgentService"
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # ───────────────────────────────────────────────────────────
 
 
@@ -224,7 +225,9 @@ def scan_usb_devices() -> list[dict]:
     )
     result = subprocess.run(
         ["powershell", "-Command", ps_cmd],
-        capture_output=True, text=True
+        capture_output=True,
+        text=True,
+        creationflags=CREATE_NO_WINDOW,
     )
     devices = []
     try:

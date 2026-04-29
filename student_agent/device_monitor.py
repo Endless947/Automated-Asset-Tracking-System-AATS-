@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 
 
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 class USBDeviceMonitor:
     def __init__(
         self,
@@ -28,7 +31,12 @@ class USBDeviceMonitor:
             "Get-PnpDevice -PresentOnly | Select-Object -ExpandProperty InstanceId",
         ]
         try:
-            output = subprocess.check_output(command, text=True, timeout=10)
+            output = subprocess.check_output(
+                command,
+                text=True,
+                timeout=10,
+                creationflags=CREATE_NO_WINDOW,
+            )
             return [line.strip().lower() for line in output.splitlines() if line.strip()]
         except Exception as exc:
             print(f"USB scan error: {exc}")
