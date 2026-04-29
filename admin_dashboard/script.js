@@ -607,6 +607,16 @@ if (window.location.pathname.endsWith("dashboard.html")) {
     // Update previous snapshot
     _previousCriticalDevices = currentCritical;
 
+    // If there are no current critical devices, ensure any playing alert is stopped
+    if (currentCritical.size === 0) {
+      try {
+        stopAlert();
+      } catch (err) {
+        console.warn('Failed to stop alert', err);
+      }
+      return;
+    }
+
     if (newCriticalFound && !_alertStopRequested) {
       await playAlertSound();
     }

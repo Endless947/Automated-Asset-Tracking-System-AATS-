@@ -13,6 +13,7 @@ from mqtt_client import MQTTClient
 class AgentRuntime:
     def __init__(self, config_path: Optional[str] = None) -> None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
+        self._base_dir = base_dir
         self._config_path = config_path or os.path.join(base_dir, "config.json")
         self._mqtt_client: Optional[MQTTClient] = None
         self._usb_monitor: Optional[USBDeviceMonitor] = None
@@ -22,6 +23,7 @@ class AgentRuntime:
         self._lab_pc: Tuple[str, str] | None = None
         self._agent_version: str = "1.0.0"
         self._heartbeat_interval_sec: int = 30
+        self._pidfile = os.path.join(self._base_dir, "agent.pid")
 
     def _load_config(self) -> Dict:
         with open(self._config_path, "r", encoding="utf-8") as f:
@@ -79,6 +81,13 @@ class AgentRuntime:
 
         self._running = True
 
+        # Write pidfile so external tools (uninstall) can locate the running agent
+        try:
+            with open(self._pidfile, "w", encoding="utf-8") as pf:
+                pf.write(str(os.getpid()))
+        except Exception:
+            pass
+
         def heartbeat_loop() -> None:
             assert self._lab_pc is not None
             lab, pc = self._lab_pc
@@ -120,6 +129,13 @@ class AgentRuntime:
             except Exception:
                 pass
             self._mqtt_client.disconnect()
+
+        # Remove pidfile on clean shutdown
+        try:
+            if os.path.exists(self._pidfile):
+                os.remove(self._pidfile)
+        except Exception:
+            pass
 
 
 _runtime: Optional[AgentRuntime] = None

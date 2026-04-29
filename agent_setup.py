@@ -87,17 +87,40 @@ def is_setup_done(base_dir: str) -> bool:
 
 def unregister_autostart() -> None:
     """Remove agent from Windows registry auto-start."""
+    removed_any = False
+    # Try current user run key
     try:
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0, winreg.KEY_SET_VALUE
         )
         winreg.DeleteValue(key, STARTUP_REG_NAME)
         winreg.CloseKey(key)
-        print("[+] Agent removed from auto-start.")
+        print("[+] Agent removed from current-user auto-start.")
+        removed_any = True
     except FileNotFoundError:
-        print("[!] Agent was not registered for auto-start.")
+        pass
     except Exception as e:
-        print(f"[!] Could not remove auto-start: {e}")
+        print(f"[!] Could not remove current-user auto-start: {e}")
+
+    # If running elevated, also try the local machine run key
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, STARTUP_REG_KEY, 0, winreg.KEY_SET_VALUE
+        )
+        try:
+            winreg.DeleteValue(key, STARTUP_REG_NAME)
+            print("[+] Agent removed from machine-wide auto-start.")
+            removed_any = True
+        except FileNotFoundError:
+            pass
+        finally:
+            winreg.CloseKey(key)
+    except Exception:
+        # This will commonly fail when not running as admin; ignore silently
+        pass
+
+    if not removed_any:
+        print("[!] Agent was not registered for auto-start.")
 
 
 def service_exists() -> bool:
@@ -149,6 +172,30 @@ def uninstall(base_dir: str) -> None:
         subprocess.run([python, service_script, "remove"], cwd=service_dir)
 
     unregister_autostart()
+
+    # Attempt to stop any running foreground agent using pidfile
+    try:
+        pidfile = os.path.join(base_dir, "student_agent", "agent.pid")
+        if os.path.exists(pidfile):
+            try:
+                with open(pidfile, "r", encoding="utf-8") as pf:
+                    raw = pf.read().strip()
+                    pid = int(raw) if raw else None
+            except Exception:
+                pid = None
+
+            if pid:
+                print(f"[*] Found running agent PID {pid}; attempting to terminate...")
+                try:
+                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False)
+                except Exception:
+                    pass
+            try:
+                os.remove(pidfile)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     cfg = config_path(base_dir)
     if os.path.exists(cfg):
