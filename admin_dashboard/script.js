@@ -670,7 +670,7 @@ if (window.location.pathname.endsWith("dashboard.html")) {
       return;
     }
 
-    if (newCriticalFound && !_alertStopRequested) {
+    if (newCriticalFound) {
       await playAlertSound();
     }
   }
