@@ -260,6 +260,24 @@ def remove_lab_device_from_tracking(lab_id: str, pc_id: str, device_id: str, _: 
     return {"status": "removed", "lab_id": lab_id, "pc_id": pc_id, "device_id": device_id}
 
 
+@app.delete("/labs/{lab_id}")
+def delete_lab(lab_id: str, _: None = Depends(require_admin)):
+    """Delete a lab and all associated data."""
+    if not lab_id or not lab_id.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="lab_id is required")
+    
+    with _pending_lock:
+        keys_to_remove = [key for key in pending if key[0] == lab_id]
+        for key in keys_to_remove:
+            pending.pop(key, None)
+    
+    try:
+        db.delete_lab(lab_id.strip())
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    return {"status": "deleted", "lab_id": lab_id.strip()}
+
+
 @app.get("/alerts")
 def get_alerts(
     from_time: str | None = Query(default=None, alias="from"),

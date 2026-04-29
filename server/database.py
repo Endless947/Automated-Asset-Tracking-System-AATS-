@@ -119,6 +119,15 @@ class Database:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS labs (
+                    lab_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
 
     def _is_pc_excluded(self, conn: sqlite3.Connection, lab_id: str, pc_id: str) -> bool:
         row = conn.execute(
@@ -444,21 +453,30 @@ class Database:
         with self._conn() as conn:
             rows = conn.execute(
                 """
-                                SELECT p.lab_id, COUNT(DISTINCT p.pc_id) as pc_count
-                                FROM pc_heartbeat p
-                                WHERE NOT EXISTS (
-                                        SELECT 1 FROM excluded_pcs e
-                                        WHERE e.lab_id = p.lab_id AND e.pc_id = p.pc_id
-                                )
-                GROUP BY p.lab_id
-                ORDER BY p.lab_id
+                SELECT lab_id FROM labs
+                ORDER BY lab_id
                 """
             ).fetchall()
             
             lab_list = []
             for row in rows:
                 lab_id = row["lab_id"]
-                pc_count = row["pc_count"]
+                
+                # Count PCs in this lab (excluding removed ones)
+                pc_count = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT p.pc_id)
+                    FROM pc_heartbeat p
+                    WHERE p.lab_id = ?
+                        AND NOT EXISTS (
+                            SELECT 1 FROM excluded_pcs e
+                            WHERE e.lab_id = p.lab_id AND e.pc_id = p.pc_id
+                        )
+                    """,
+                    (lab_id,)
+                ).fetchone()[0]
+                
+                # Count devices in this lab (excluding removed ones)
                 device_count = conn.execute(
                     """
                     SELECT COUNT(*)
@@ -476,6 +494,7 @@ class Database:
                     (lab_id,)
                 ).fetchone()[0]
 
+                # Get status summary
                 status_counts = conn.execute(
                     """
                     SELECT current_status, COUNT(*) as cnt
@@ -503,18 +522,28 @@ class Database:
             return lab_list
 
     def create_lab(self, lab_id: str) -> None:
-        """Create a minimal placeholder entry so the UI can show an empty lab.
-
-        This inserts a single placeholder PC heartbeat row for the given lab_id.
-        The placeholder PC id is a reserved sentinel so it can be removed later
-        by the admin if desired.
+        """Create a lab entry in the labs table.
+        
+        This creates a lab record so the lab persists in the system even if it has no PCs.
         """
-        placeholder_pc = "__placeholder__"
         with self._conn() as conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO pc_heartbeat (lab_id, pc_id, pc_status, last_seen, agent_version, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO labs (lab_id, created_at, updated_at)
+                VALUES (?, ?, ?)
                 """,
-                (lab_id, placeholder_pc, "offline", None, None, now_iso()),
+                (lab_id, now_iso(), now_iso()),
             )
+
+    def delete_lab(self, lab_id: str) -> None:
+        """Delete a lab and all associated data (PCs, devices, events, etc.)."""
+        with self._conn() as conn:
+            # Delete the lab record
+            conn.execute("DELETE FROM labs WHERE lab_id = ?", (lab_id,))
+            # Delete all related data
+            conn.execute("DELETE FROM device_events WHERE lab_id = ?", (lab_id,))
+            conn.execute("DELETE FROM device_state_current WHERE lab_id = ?", (lab_id,))
+            conn.execute("DELETE FROM pc_heartbeat WHERE lab_id = ?", (lab_id,))
+            conn.execute("DELETE FROM excluded_pcs WHERE lab_id = ?", (lab_id,))
+            conn.execute("DELETE FROM excluded_devices WHERE lab_id = ?", (lab_id,))
+            conn.execute("DELETE FROM pending_window WHERE lab_id = ?", (lab_id,))

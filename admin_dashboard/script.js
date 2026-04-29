@@ -220,6 +220,9 @@ if (window.location.pathname.endsWith("index.html") || window.location.pathname 
       }
 
       labs.forEach(lab => {
+        const cardContainer = document.createElement("div");
+        cardContainer.style.position = "relative";
+        
         const card = document.createElement("a");
         card.className = "card";
         card.href = buildAppUrl("dashboard.html", { lab: lab.lab_id });
@@ -243,7 +246,36 @@ if (window.location.pathname.endsWith("index.html") || window.location.pathname 
           <p class="meta-info">${lab.pc_count} PCs • ${lab.device_count} Peripheral Devices</p>
           ${statusHtml}
         `;
-        labGrid.appendChild(card);
+        
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "btn btn-danger";
+        removeButton.textContent = "Remove Lab";
+        removeButton.style.position = "absolute";
+        removeButton.style.top = "10px";
+        removeButton.style.right = "10px";
+        removeButton.style.padding = "6px 12px";
+        removeButton.style.fontSize = "12px";
+        
+        removeButton.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          
+          try {
+            await deleteTrackingResource(
+              `${API_BASE}/labs/${encodeURIComponent(lab.lab_id)}`,
+              `Are you sure you want to permanently delete the lab "${lab.lab_id}" and all its data? This cannot be undone.`
+            );
+            await loadLabs();
+          } catch (err) {
+            console.error(err);
+            window.alert(`Failed to delete lab ${lab.lab_id}.`);
+          }
+        });
+        
+        cardContainer.appendChild(card);
+        cardContainer.appendChild(removeButton);
+        labGrid.appendChild(cardContainer);
       });
     } catch (err) {
       labGrid.innerHTML = `<div class="empty-state">Error loading labs: ${err.message}</div>`;
@@ -265,6 +297,27 @@ if (window.location.pathname.endsWith("dashboard.html")) {
   }
 
   document.getElementById("selectedLabName").textContent = labId;
+
+  // Add delete lab button handler
+  const removeLabBtn = document.getElementById("removeLabBtn");
+  if (removeLabBtn) {
+    removeLabBtn.style.display = "inline-block";
+    removeLabBtn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      
+      try {
+        await deleteTrackingResource(
+          `${API_BASE}/labs/${encodeURIComponent(labId)}`,
+          `Are you sure you want to permanently delete the lab "${labId}" and all its data? This cannot be undone.`
+        );
+        window.location.href = buildAppUrl("index.html");
+      } catch (err) {
+        console.error(err);
+        window.alert(`Failed to delete lab ${labId}.`);
+      }
+    });
+  }
 
   async function loadDashboard() {
     try {
